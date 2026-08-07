@@ -27,7 +27,7 @@ mobile/
 - Git 提交：`0995eb2`
 - 安装包：`CarGPS-Mobile-v0.2.0.apk`，版本 `0.2.0 (3)`
 - SHA-256：`8fc1238c1fdc45db0e49d3d78243abdfe834fe15e87008e53004ae3eea366bc2`
-- 当前开发线：`v0.2.0` 之后的 M1-M6；M1-M5 已提交，M6 单一事件队列已通过本地关卡与 Pixel_9 核心短路径。M1-M6 尚未打 tag 或发布。
+- 当前开发线：`v0.2.0` 之后的 M1-M7；M1-M6 已提交，M7 Baseline/Startup Profile 已在 Pixel_9 重新生成并完成冷启动对照。M1-M7 尚未打 tag 或发布。
 
 ## 验证设备
 
@@ -66,7 +66,8 @@ mobile/
 - M3 已在 `Pixel_9` 通过应用进程 `SIGKILL` 恢复验证；恢复上限是最后确认检查点，最多约 1 秒的内存尾批仍不承诺零丢点，`force-stop` 也不会被描述为普通系统恢复。
 - M4 已完成数据库损坏与无活动行程的显式区分、Room schema v4 和旧 schema 无损迁移；仍需在 API 27/API 29 随整体验收复核。
 - M5 策略实现、11 个 JVM 场景、手机版 instrumentation 6/6 和 `Pixel_9` 系统权限矩阵已通过，并已提交为 `4d87a60`，但尚未发版；API 27/29/31/33 权限差异仍未验收。
-- M6 当前开发线已加入单一 `Channel.UNLIMITED` 事件队列，固定先恢复；关闭与 actor 异常会唤醒等待者并拒绝后续事件。Service 通过统一定位策略区分可见预览、Start 等待和已确认活动行程：客户端不可见时必须等 Start 确认后才进入后台定位，可见页面仍保留定位预览。本地 44/44 与 24/24 JVM、完整构建关卡、Pixel_9 instrumentation 12/12 与 6/6，以及开始/重复 ensure/结束短路径均已通过。下一版还必须完成跨 API 30 分钟回归，并刷新不含已删除类名且覆盖行程开始、服务恢复的 Baseline Profile；真实设备 2 小时长测继续分阶段推进，AGP 9 保持延后。
+- M6 已提交为 `19fa99c`：单一 `Channel.UNLIMITED` 事件队列固定先恢复，Service 通过统一定位策略区分可见预览、Start 等待和已确认活动行程。本地 44/44 与 24/24 JVM、完整构建关卡、Pixel_9 instrumentation 12/12 与 6/6，以及开始/重复 ensure/结束短路径均已通过。
+- M7 已在 Pixel_9 重新生成 50,591 行 Baseline Profile 和 49,417 行 Startup Profile，旧 `DashboardViewModel` 类名命中为 0；Release APK 内含新的 `baseline.prof` 与 `baseline.profm`。两轮冷启动对照中 Profile 中位数分别比无预编译快约 17.4% 和 18.2%。下一版仍必须完成跨 API 30 分钟回归；真实设备 2 小时长测继续分阶段推进，AGP 9 保持延后。
 
 ## 文档与验证资料
 

@@ -109,7 +109,7 @@ flowchart LR
 - UI：无权限、仅近似、永久拒绝、系统定位关闭、通知拒绝、无数据、缺海拔、弱定位、过期、超长坐标文本，以及 `Pixel_9` 竖屏安全区和单屏无滚动约束。
 - 服务：Manifest 私有性、`location` 类型、权限声明、显式 Intent 和不可变 `PendingIntent`；`LocationEnginePolicy` 统一区分可见定位预览、Start 等待和已确认活动行程，客户端不可见时只有活动行程可启动后台定位。运行时覆盖启动编排确认、失败清理、Home、锁屏、Activity 重建、通知结束与单定位线程；可见页面的定位预览可以在 Start 确认前运行，但 Runtime 仍为 `IDLE` 时不会把样本写入行程。
 - 恢复：用应用自身 UID 向活动行程进程发送 `SIGKILL`，验证系统以 null Intent 重建 `START_STICKY` Service、等待存储、恢复前台通知和单定位线程；`force-stop` 单独建模，不算普通恢复。
-- 性能：Baseline Profile 当前只覆盖首屏；Macrobenchmark 在 Pixel_9 上记录无预编译冷启动 TTID，相对比较时保持同一 AVD 配置。M1-M6 重构后生成文件仍含已删除类名，必须补行程开始和服务恢复热路径并重新生成，才能作为当前性能资产。
+- 性能：Baseline Profile 以两个独立场景采集：首屏启动进入 Baseline 与 Startup Profile，完整行程场景覆盖开始、Home、Activity/Service 重绑、暂停、继续和结束。Macrobenchmark 在同一 Pixel_9 上同时记录无预编译与强制 Baseline Profile 的冷启动 TTID；模拟器结果只用于相对比较。当前 Profile 已移除旧 ViewModel 类名并命中新事件队列、Service、定位策略和 Room 热路径。
 - 设备：安装、UI 和功能验证显式指定 `Pixel_9`，不操作 Redmi 真机；任何安装命令都不能依赖 adb 默认设备。
 
 ## 9. 已验证的官方依据
@@ -128,4 +128,4 @@ flowchart LR
 
 剩余工作不能按“权限补丁”或“升版本”孤立推进。前台服务已经改变定位会话所有权，Room 已经改变写入确认和进程恢复语义；M5 跨 API 权限验收与 M6 事件队列的集成验证仍会影响服务能否启动及尾点能否可靠落库。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
 
-M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，M4 已完成 Room schema v4、旧版本显式迁移和损坏状态护栏。M5 权限状态机已提交，并通过本地关卡与 Pixel_9 / API 35 系统权限矩阵；M6 单一事件队列和 Service 定位策略已通过本地关卡、Pixel_9 instrumentation 和开始/结束核心短路径。下一步完成 M6 跨 API/长测并刷新 M7 Baseline Profile；M5 的 API 27/29/31/33 矩阵、真实设备 2 小时长测和 M8 AGP 9 分阶段推进。
+M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，M4 已完成 Room schema v4、旧版本显式迁移和损坏状态护栏。M5 权限状态机与 M6 单一事件队列已经提交，并通过本地关卡与 Pixel_9 / API 35 核心验证；M7 Baseline/Startup Profile 已完成 Pixel_9 重采和两轮冷启动对照。下一步集中完成 M2-M6 的跨 API/长测；M5 的 API 27/29/31/33 矩阵、真实设备 2 小时长测和 M8 AGP 9 分阶段推进。

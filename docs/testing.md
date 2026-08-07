@@ -2,7 +2,7 @@
 
 作者：long
 
-更新日期：2026-08-08 00:51:03（北京时间，UTC+8）
+更新日期：2026-08-08 05:23:04（北京时间，UTC+8）
 
 ## 测试分层
 
@@ -10,7 +10,7 @@
 - `gps-core/src/androidTest`：旧 SQLite adapter 契约、Room v1 到 v4 显式迁移、v4 事务契约、损坏数据保留和迁移失败回滚。
 - `mobile-app/src/androidTest`：Pixel_9 首屏核心遥测与无滚动、权限阻断 UI 与设置 Intent，以及前台服务 Manifest、显式 Intent、不可变 `PendingIntent` 安全约束。
 - `mobile-app/src/test`：启动型 Service 的恢复策略，以及行程启动权限策略；权限测试覆盖精确/近似定位、首次/永久拒绝、系统定位、通知权限、API 27 和设置返回收敛。
-- `baselineprofile`：生成 Release Baseline Profile，并执行无预编译冷启动 Macrobenchmark。
+- `baselineprofile`：分别生成 Release Baseline/Startup Profile，并执行无预编译与强制 Baseline Profile 的冷启动 Macrobenchmark。
 
 项目没有引入 DI 框架。`CarGpsApplication` 负责创建进程内唯一 `DashboardRuntime` 与存储队列，Activity 和 Service 通过同一实例协作；领域测试直接使用 fake `TripStorage`，现阶段不引入 Hilt。
 
@@ -128,6 +128,16 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - Pixel_9 运行时短路径：开始后 UI 为“记录中”，Service 为 `location` 前台类型；以应用 UID 连续两次 ensure 后 `cargps-location` 线程仍为 1；结束后回到“等待开始”且历史增加一段，Home 后 Service 清除，crash buffer 无 CarGPS 记录。
 - 尚未完成 API 27/API 29 的 `START_STICKY` 恢复、完整 30 分钟 Home/切换应用/锁屏、设备重启/低存储和真实设备 2 小时长测；Pixel_9 短路径不能替代这些门槛。
 
+## M7 Baseline Profile 与冷启动对照
+
+- `BaselineProfileGenerator` 拆成两个独立采集场景：`generateStartup` 只采集授权后稳定首屏并写入 Startup Profile；`generateCriticalUserJourneys` 覆盖开始行程、Home、返回重绑 Service、暂停、继续和结束确认，不把完整行程规则全部标成启动布局。
+- `Pixel_9 / emulator-5554 / API 35` 的 `generateReleaseBaselineProfile` 成功：Baseline Profile 50,591 行，Startup Profile 49,417 行；`DashboardViewModel`、`DashboardViewModelFactory` 命中均为 0。
+- 新 Profile 命中 `DashboardRuntime`、`TripSessionEventQueue`、`TripRecordingService`、`LocationEnginePolicy`、`TripStartOrchestrator` 和 `RoomTripStorage`；Release APK 内含 `assets/dexopt/baseline.prof`（4,224 字节）与 `baseline.profm`（199 字节）。
+- 冷启动第一轮：无预编译最小/中位/最大为 278.02/306.48/333.31ms；强制 Baseline Profile 为 244.77/253.11/445.35ms，中位改善约 17.4%，但存在一次明显离群点。
+- 冷启动第二轮：无预编译最小/中位/最大为 270.18/312.96/345.67ms；强制 Baseline Profile 为 228.74/256.06/338.91ms，中位改善约 18.2%。原始 JSON 保存在本地 `artifacts/cargps-mobile-m7-startup-benchmark-run1.json` 和 `run2.json`。
+- `v0.2.0` 历史无预编译中位为 241.9ms；当前 M1-M6 无预编译中位约 306-313ms，说明运行时架构扩展带来启动成本。Profile 能显著回收当前构建的启动开销，但不能据此宣称整体启动无回退。
+- 上述数据来自未锁 CPU 的模拟器，只能作为同一 Pixel_9 AVD 的相对证据，不能外推真机绝对性能。
+
 ## v0.2.0 发布验收
 
 - 提交与 tag：`0995eb2` / `v0.2.0`；发布时工作区与 `origin/main` 同步。
@@ -138,4 +148,4 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 对齐与优化：Build Tools 36 的 `zipalign -c -P 16 4` 通过；APK 内含 `assets/dexopt/baseline.prof` 和 `baseline.profm`。
 - 安装：正式包在 `Pixel_9` / API 35 冷启动成功；UI 树滚动节点为 0，crash buffer 为空。切换 debug 到 release 签名时仅清除了该模拟器内的测试数据。
 
-尚未完成的 M6 跨 API 生命周期并发与长测、API 27/API 29 升级安装与进程恢复、设备重启、低存储、权限设备验收与跨 API 矩阵、完整 30 分钟后台记录、M7 Profile 刷新和真实设备场景见 [剩余高风险迁移项](./migration-risks.md)，不能用上述 Pixel_9 / API 35 短路径结果替代。
+尚未完成的 M2-M6 跨 API 运行时、权限、恢复、生命周期并发与长测，以及设备重启、低存储和真实设备场景见 [剩余高风险迁移项](./migration-risks.md)，不能用上述 Pixel_9 / API 35 短路径结果替代。

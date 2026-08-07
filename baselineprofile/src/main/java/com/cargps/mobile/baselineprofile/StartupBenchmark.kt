@@ -1,5 +1,6 @@
 package com.cargps.mobile.baselineprofile
 
+import androidx.benchmark.macro.BaselineProfileMode
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.StartupTimingMetric
@@ -18,10 +19,25 @@ class StartupBenchmark {
 
     @Test
     fun coldStartupWithoutCompilation() {
+        measureColdStartup(CompilationMode.None())
+    }
+
+    @Test
+    fun coldStartupWithBaselineProfile() {
+        measureColdStartup(
+            CompilationMode.Partial(
+                baselineProfileMode = BaselineProfileMode.Require,
+                warmupIterations = 3,
+            ),
+        )
+    }
+
+    private fun measureColdStartup(compilationMode: CompilationMode) {
+        // 作者：long｜两组冷启动只改变编译模式，设备、次数、启动方式保持一致，结果才能用于版本内相对比较。
         benchmarkRule.measureRepeated(
             packageName = PACKAGE_NAME,
             metrics = listOf(StartupTimingMetric()),
-            compilationMode = CompilationMode.None(),
+            compilationMode = compilationMode,
             startupMode = StartupMode.COLD,
             iterations = 5,
             setupBlock = { pressHome() },
