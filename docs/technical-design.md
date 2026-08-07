@@ -45,7 +45,7 @@ flowchart LR
 - NMEA：使用 API 24 已提供的 `addNmeaListener(OnNmeaMessageListener, Handler)`，不要使用 API 30 才加入的 `Executor` 重载。
 - 卫星状态：使用 `registerGnssStatusCallback(GnssStatus.Callback, Handler)`，不要继续使用 API 24 已废弃的 `GpsStatus.Listener`。
 - 回调线程：位置、NMEA 和卫星回调注册到专用 `HandlerThread`；NMEA 校验与卫星遍历不占用主线程，聚合结果再回到主线程更新状态。
-- 权限：NMEA 与 GNSS 详细状态需要 `android.permission.ACCESS_FINE_LOCATION`；运行时授权失败时进入“未授权”状态。
+- 权限：NMEA、GNSS 详细状态及可靠的速度/里程记录需要 `android.permission.ACCESS_FINE_LOCATION`。`TripAccessPolicy` 区分仅近似、首次/永久拒绝、系统定位关闭和 Android 13+ 通知拒绝；阻断时提供对应请求或设置入口，不能笼统显示“未授权”或误报“正在记录”。
 - 数据字段：在读取速度、海拔、方向和精度前分别检查 `hasSpeed()`、`hasAltitude()`、`hasBearing()` 和 `hasAccuracy()`，缺失值保持为空。
 
 ## 4. 数据优先级
@@ -79,10 +79,11 @@ flowchart LR
 - `TripRecordingService` 是唯一定位会话所有者。界面可见且未开始行程时，Activity 绑定服务以获取定位；活动行程开始后，Service 在 Activity 不可见或锁屏时继续持有 `LocationEngine`。
 - 用户只能在可见 Activity 内明确开始行程并调用 `startForegroundService()`，符合 Android 12 / API 31 起的后台启动限制；当前不支持任意后台时刻新建定位服务。
 - Service 使用常驻低优先级通知，提供返回应用和结束行程的显式不可变 `PendingIntent`；通知按模式、每 10 米或最多每 5 秒刷新，避免每秒重建 SystemUI 视图。
-- Manifest 已声明 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_LOCATION` 和 `android:foregroundServiceType="location"`；Service 在升为前台前检查精确位置权限。
+- Manifest 已声明 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_LOCATION` 和 `android:foregroundServiceType="location"`；Activity 与 Service 在启动、恢复和系统状态变化时使用统一 `TripAccessState` 检查精确位置、GPS Provider 和 API 33+ 通知权限。
 - API 27 不需要 `ACCESS_BACKGROUND_LOCATION`，该权限从 API 29 才出现。当前 M2 不申请后台位置；只有未来确需从后台创建定位服务时才单独评审该权限和系统豁免。
 - M2 核心实现及 Pixel_9 / API 35 短路径已验证，但 API 27/API 29、连续锁屏 30 分钟和真实道路长测未完成，因此尚不能把跨版本后台记录标记为已正式交付。
 - 系统以 `START_STICKY` 重建 Service 时先升为“正在确认行程存储”前台状态，并等待 `DashboardRuntime.awaitInitialRestore()`；只有恢复完成且存在活动行程时才重启定位，没有活动行程或恢复失败后才停止 Service。
+- 权限请求历史只用于区分首次请求与后续拒绝；Activity 在权限回调、设置返回、`onResume()` 和 Provider 广播后重新读取系统状态。设置返回不自动开始行程，活动行程受阻时停止定位并保留用户结束行程的入口。
 
 ## 7. 持久化实现
 
@@ -103,7 +104,7 @@ flowchart LR
 - 质量门：时间倒退、重复时间、低精度、超时恢复、跳点、静止漂移。
 - 统计：移动/停车边界、暂停、恢复、结束、进程重建和零时长除法。
 - 长行程：十万点增量统计不溢出，`DashboardRuntime` 不持有完整轨迹；Room 千点批量写入后顺序与恢复一致。
-- UI：无权限、无数据、缺海拔、弱定位、过期、超长坐标文本，以及 `Pixel_9` 竖屏安全区和单屏无滚动约束。
+- UI：无权限、仅近似、永久拒绝、系统定位关闭、通知拒绝、无数据、缺海拔、弱定位、过期、超长坐标文本，以及 `Pixel_9` 竖屏安全区和单屏无滚动约束。
 - 服务：Manifest 私有性、`location` 类型、权限声明、显式 Intent 和不可变 `PendingIntent`；运行时覆盖 Home、锁屏、Activity 重建、通知结束与单定位线程。
 - 恢复：用应用自身 UID 向活动行程进程发送 `SIGKILL`，验证系统以 null Intent 重建 `START_STICKY` Service、等待存储、恢复前台通知和单定位线程；`force-stop` 单独建模，不算普通恢复。
 - 性能：Baseline Profile 覆盖首屏；Macrobenchmark 在 Pixel_9 上记录无预编译冷启动 TTID，相对比较时保持同一 AVD 配置。M2 重构后生成文件仍含已删除类名，必须重新生成后才能作为当前性能资产。
@@ -114,14 +115,15 @@ flowchart LR
 - [`OnNmeaMessageListener`](https://developer.android.com/reference/android/location/OnNmeaMessageListener)：API 24 加入，用于接收 GNSS NMEA 语句。
 - [`LocationManager`](https://developer.android.com/reference/android/location/LocationManager)：位置 API 权限、NMEA 监听和 GNSS 状态回调定义。
 - [`Location`](https://developer.android.com/reference/android/location/Location)：位置对象包含坐标、时间、精度，以及可选的方向、海拔和速度。
+- [运行时位置权限](https://developer.android.com/develop/sensors-and-location/location/permissions/runtime)：Android 12+ 允许用户只授予近似位置；精确升级应再次共同请求 `ACCESS_COARSE_LOCATION` 与 `ACCESS_FINE_LOCATION`，并根据两项授权结果区分精度。
 - [后台定位](https://developer.android.com/develop/sensors-and-location/location/background)：Android 8.0 及以上后台应用的位置更新会被限制为每小时少量次数。
 - [Android 14 前台服务类型](https://developer.android.com/about/versions/14/changes/fgs-types-required)：定位服务需声明 `location` 类型和 `FOREGROUND_SERVICE_LOCATION`，并在启动前满足位置权限条件。
 - [启动前台服务](https://developer.android.com/develop/background-work/services/fgs/launch)：Android 12 起限制后台启动；Android 14 起会核验服务类型对应权限。
 
-定位 API 依据于 2026-08-05 核验，前台服务规则于 2026-08-07 重新抓取 Android Developers 正文确认。不同手机 GNSS 驱动是否实际输出全部 NMEA 语句，仍需在目标设备上验证。
+定位基础 API 依据于 2026-08-05 核验，近似位置升级和前台服务规则于 2026-08-07 重新抓取 Android Developers 正文确认。不同手机 GNSS 驱动是否实际输出全部 NMEA 语句，仍需在目标设备上验证。
 
 ## 10. 后续迁移边界
 
-剩余工作不能按“权限补丁”或“升版本”孤立推进。前台服务已经改变定位会话所有权，Room 已经改变写入确认和进程恢复语义，后续权限状态机与事件串行化仍会影响服务能否启动及尾点能否可靠落库。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
+剩余工作不能按“权限补丁”或“升版本”孤立推进。前台服务已经改变定位会话所有权，Room 已经改变写入确认和进程恢复语义；M5 权限状态机的设备验收与 M6 事件串行化仍会影响服务能否启动及尾点能否可靠落库。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
 
-M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，M4 已完成 Room schema v4、旧版本显式迁移和损坏状态护栏。下一版发布前先补 M5 权限失败最小闭环、M6 单一事件队列与跨 API 长测，并刷新 M7 Baseline Profile；真实设备 2 小时长测和 M8 AGP 9 分阶段推进。
+M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，M4 已完成 Room schema v4、旧版本显式迁移和损坏状态护栏。M5 权限状态机已在工作树实现，并通过本地关卡与 Pixel_9 / API 35 系统权限矩阵；下一步推进 M6 单一事件队列、跨 API 长测并刷新 M7 Baseline Profile。M5 的 API 27/29/31/33 矩阵、真实设备 2 小时长测和 M8 AGP 9 分阶段推进。

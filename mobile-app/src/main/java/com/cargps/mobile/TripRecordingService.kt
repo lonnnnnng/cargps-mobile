@@ -1,6 +1,5 @@
 package com.cargps.mobile
 
-import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,7 +7,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.location.Location
 import android.os.Binder
@@ -16,7 +14,6 @@ import android.os.IBinder
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
-import androidx.core.content.ContextCompat
 import com.cargps.DashboardRuntime
 import com.cargps.DashboardState
 import com.cargps.LocationEngine
@@ -97,6 +94,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         startCommandReceived = true
         when (intent?.action) {
             ACTION_START_TRIP -> requestStartTrip()
+            ACTION_ENSURE_ACTIVE_TRIP -> ensureActiveTripService()
             ACTION_END_TRIP -> {
                 // 作者：long｜通知结束操作可能重建 Service，先升为前台再等待结束事务确认，避免后台启动窗口内被系统终止。
                 if (promoteToForeground(runtime.state.value)) {
@@ -106,7 +104,10 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             null -> restoreStartedServiceIfNeeded()
             else -> stopSelfResult(startId)
         }
-        return if (runtime.state.value.tripMode != TripMode.IDLE || startRequested || recoveringStartedService) {
+        val tripAccessReady = currentTripAccessState().isReady
+        return if (tripAccessReady &&
+            (runtime.state.value.tripMode != TripMode.IDLE || startRequested || recoveringStartedService)
+        ) {
             START_STICKY
         } else {
             START_NOT_STICKY
@@ -135,7 +136,10 @@ class TripRecordingService : Service(), LocationEngine.Listener {
 
     override fun onPermissionRequired() = runtime.onPermissionRequired()
 
-    override fun onProviderDisabled() = runtime.onProviderDisabled()
+    override fun onProviderDisabled() {
+        runtime.onProviderDisabled()
+        serviceScope.launch { refreshLocationEngine() }
+    }
 
     override fun onSearching() = runtime.onSearching()
 
@@ -147,9 +151,11 @@ class TripRecordingService : Service(), LocationEngine.Listener {
     override fun onNmea(frame: NmeaFrame) = runtime.onNmea(frame)
 
     private fun requestStartTrip() {
-        if (!hasFineLocationPermission()) {
-            runtime.onPermissionRequired()
-            runtime.onForegroundServiceError("允许精确定位后才能开始后台行程")
+        val access = currentTripAccessState()
+        if (!access.isReady) {
+            startRequested = false
+            reportBlockedAccess(access)
+            locationEngine.stop()
             stopSelf()
             return
         }
@@ -163,13 +169,29 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         runtime.startTrip(System.currentTimeMillis())
     }
 
+    private fun ensureActiveTripService() {
+        val access = currentTripAccessState()
+        if (!access.isReady) {
+            reportBlockedAccess(access)
+            locationEngine.stop()
+            stopSelf()
+            return
+        }
+        runtime.onForegroundServiceError(null)
+        if (runtime.state.value.tripMode == TripMode.IDLE) {
+            stopSelf()
+            return
+        }
+        if (promoteToForeground(runtime.state.value)) locationEngine.start()
+    }
+
     private fun restoreStartedServiceIfNeeded() {
         recoveryJob?.cancel()
         recoveringStartedService = true
-        if (!hasFineLocationPermission()) {
+        val access = currentTripAccessState()
+        if (!access.isReady) {
             recoveringStartedService = false
-            runtime.onPermissionRequired()
-            runtime.onForegroundServiceError("精确定位权限已失效，无法恢复后台行程")
+            reportBlockedAccess(access)
             stopSelf()
             return
         }
@@ -178,12 +200,12 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             return
         }
         recoveryJob = serviceScope.launch {
-            // 作者：long｜START_STICKY 新进程先显示恢复通知并等待 SQLite 结果，不能把 Runtime 初始 IDLE 误判为没有活动行程。
+            // 作者：long｜START_STICKY 新进程先显示恢复通知并等待 Room 结果，不能把 Runtime 初始 IDLE 误判为没有活动行程。
             val restoredState = runtime.awaitInitialRestore()
             recoveringStartedService = false
             when (decideStartedServiceRecovery(restoredState)) {
                 StartedServiceRecoveryAction.RESUME_ACTIVE_TRIP -> {
-                    if (hasFineLocationPermission() && promoteToForeground(restoredState)) {
+                    if (currentTripAccessState().isReady && promoteToForeground(restoredState)) {
                         locationEngine.start()
                     }
                 }
@@ -198,22 +220,26 @@ class TripRecordingService : Service(), LocationEngine.Listener {
     private fun updateClientVisibility(visible: Boolean) {
         clientVisible = visible
         refreshLocationEngine()
-        handleRuntimeState(runtime.state.value)
     }
 
     private fun refreshLocationEngine() {
         val activeTrip = runtime.state.value.tripMode != TripMode.IDLE
-        if ((clientVisible || activeTrip || startRequested) && hasFineLocationPermission()) {
+        val access = currentTripAccessState()
+        val canPreviewLocation = clientVisible && !access.blocksLocation
+        val canRecordTrip = (activeTrip || startRequested) && access.isReady
+        if (canPreviewLocation || canRecordTrip) {
             runtime.onForegroundServiceError(null)
             locationEngine.start()
         } else {
             locationEngine.stop()
-            if (!hasFineLocationPermission()) runtime.onPermissionRequired()
+            if (!access.isReady) reportBlockedAccess(access)
         }
+        handleRuntimeState(runtime.state.value)
     }
 
     private fun handleRuntimeState(state: DashboardState) {
         val activeTrip = state.tripMode != TripMode.IDLE
+        val access = currentTripAccessState()
         if (activeTrip) startRequested = false
         if (state.tripMode == TripMode.IDLE && !state.tripCommandInProgress && state.storageError != null) {
             startRequested = false
@@ -221,7 +247,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
 
         val keepForeground = recoveringStartedService || activeTrip || startRequested ||
             (foreground && state.tripCommandInProgress)
-        if (keepForeground && hasFineLocationPermission()) {
+        if (keepForeground && access.isReady) {
             if (promoteToForeground(state)) locationEngine.start()
         } else if (foreground) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -230,7 +256,14 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             lastNotificationDistanceBucket = -1L
         }
 
-        if (startCommandReceived && !recoveringStartedService && !activeTrip && !startRequested &&
+        if (activeTrip && !access.isReady) {
+            locationEngine.stop()
+            reportBlockedAccess(access)
+        }
+
+        if (activeTrip && !access.isReady && !clientVisible) {
+            stopSelf()
+        } else if (startCommandReceived && !recoveringStartedService && !activeTrip && !startRequested &&
             !state.tripCommandInProgress && !clientVisible
         ) {
             locationEngine.stop()
@@ -321,12 +354,16 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         notificationManager.createNotificationChannel(channel)
     }
 
-    private fun hasFineLocationPermission(): Boolean =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
+    private fun currentTripAccessState(): TripAccessState = evaluateTripAccess(readTripAccessSnapshot())
+
+    private fun reportBlockedAccess(access: TripAccessState) {
+        if (access.blocksLocation) runtime.onPermissionRequired()
+        runtime.onForegroundServiceError(access.serviceErrorMessage())
+    }
 
     companion object {
         internal const val ACTION_START_TRIP = "com.cargps.mobile.action.START_TRIP"
+        internal const val ACTION_ENSURE_ACTIVE_TRIP = "com.cargps.mobile.action.ENSURE_ACTIVE_TRIP"
         internal const val ACTION_END_TRIP = "com.cargps.mobile.action.END_TRIP"
         internal const val NOTIFICATION_CHANNEL_ID = "trip_recording"
         internal const val NOTIFICATION_ID = 2_710
@@ -340,6 +377,9 @@ class TripRecordingService : Service(), LocationEngine.Listener {
 
         fun startTripIntent(context: Context): Intent =
             Intent(context, TripRecordingService::class.java).setAction(ACTION_START_TRIP)
+
+        fun ensureActiveTripIntent(context: Context): Intent =
+            Intent(context, TripRecordingService::class.java).setAction(ACTION_ENSURE_ACTIVE_TRIP)
 
         internal fun endTripIntent(context: Context): Intent =
             Intent(context, TripRecordingService::class.java).setAction(ACTION_END_TRIP)

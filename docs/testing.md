@@ -2,14 +2,14 @@
 
 作者：long
 
-更新日期：2026-08-07 21:41:58（北京时间）
+更新日期：2026-08-07 23:06:25（北京时间，UTC+8）
 
 ## 测试分层
 
 - `gps-core/src/test`：质量门、速度、NMEA、增量行程统计、行程协调器、运行时恢复和后台存储队列。
 - `gps-core/src/androidTest`：旧 SQLite adapter 契约、Room v1 到 v4 显式迁移、v4 事务契约、损坏数据保留和迁移失败回滚。
-- `mobile-app/src/androidTest`：Pixel_9 首屏核心遥测与无滚动，以及前台服务 Manifest、显式 Intent、不可变 `PendingIntent` 安全约束。
-- `mobile-app/src/test`：启动型 Service 在存储加载、活动恢复、空闲和恢复失败四种状态下的恢复策略。
+- `mobile-app/src/androidTest`：Pixel_9 首屏核心遥测与无滚动、权限阻断 UI 与设置 Intent，以及前台服务 Manifest、显式 Intent、不可变 `PendingIntent` 安全约束。
+- `mobile-app/src/test`：启动型 Service 的恢复策略，以及行程启动权限策略；权限测试覆盖精确/近似定位、首次/永久拒绝、系统定位、通知权限、API 27 和设置返回收敛。
 - `baselineprofile`：生成 Release Baseline Profile，并执行无预编译冷启动 Macrobenchmark。
 
 项目没有引入 DI 框架。`CarGpsApplication` 负责创建进程内唯一 `DashboardRuntime` 与存储队列，Activity 和 Service 通过同一实例协作；领域测试直接使用 fake `TripStorage`，现阶段不引入 Hilt。
@@ -108,6 +108,15 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 缺失 `total_paused` 的畸形 v3 数据库在迁移失败后仍保持版本 3、旧表结构和原始行，证明当前迁移事务不会用半成品覆盖来源库。
 - 尚未执行 API 27/API 29 升级安装回归，也不把上述 fixture 结果解释为任意文件级物理损坏都能自动恢复。
 
+## M5 权限状态机回归
+
+- 2026-08-07 当前工作树完整本地关卡通过：JVM、AndroidTest 编译、`lintDebug`、`lintVitalRelease`、Debug/Release、R8、资源压缩和 `baselineprofile:assembleBenchmarkRelease` 均成功。
+- `TripAccessPolicyTest` 11/11，覆盖 Ready、仅近似定位、精度升级首次/重试/转设置、定位首次/永久拒绝、系统定位关闭、Android 13+ 通知首次/永久拒绝、API 27 无通知运行时权限和设置返回策略收敛。
+- Pixel_9 / API 35：`gps-core` instrumentation 12/12、手机版 6/6；设置 Intent、初始未授权单屏无滚动和活动行程阻断后保留结束入口均通过。
+- 真实系统 UI 已验证精确、仅近似、近似升级拒绝、定位首次/永久拒绝、通知首次/永久拒绝、通知设置返回和系统定位关闭/恢复；所有失败路径均未自动开始行程或循环弹窗。
+- 设备证据为 `artifacts/cargps-mobile-m5-*` 的 PNG/XML；命令显式锁定 `emulator-5554` 并复核 `ro.boot.qemu.avd_name = Pixel_9`，未操作 Redmi。
+- API 27/29/31/33 权限矩阵仍未验收，不能用 API 35 结果外推。
+
 ## v0.2.0 发布验收
 
 - 提交与 tag：`0995eb2` / `v0.2.0`；发布时工作区与 `origin/main` 同步。
@@ -118,4 +127,4 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 对齐与优化：Build Tools 36 的 `zipalign -c -P 16 4` 通过；APK 内含 `assets/dexopt/baseline.prof` 和 `baseline.profm`。
 - 安装：正式包在 `Pixel_9` / API 35 冷启动成功；UI 树滚动节点为 0，crash buffer 为空。切换 debug 到 release 签名时仅清除了该模拟器内的测试数据。
 
-尚未完成的 API 27/API 29 升级安装与进程恢复、设备重启、低存储、权限状态机、生命周期并发、完整 30 分钟后台记录和真实设备场景见 [剩余高风险迁移项](./migration-risks.md)，不能用上述 Pixel_9 / API 35 短路径结果替代。
+尚未完成的 API 27/API 29 升级安装与进程恢复、设备重启、低存储、权限设备验收与跨 API 矩阵、生命周期并发、完整 30 分钟后台记录和真实设备场景见 [剩余高风险迁移项](./migration-risks.md)，不能用上述 Pixel_9 / API 35 短路径结果替代。

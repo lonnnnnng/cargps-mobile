@@ -25,8 +25,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -63,6 +66,10 @@ import com.cargps.DashboardState
 import com.cargps.DashboardRuntime
 import com.cargps.FixStatus
 import com.cargps.TripMode
+import com.cargps.mobile.TripAccessBlocker
+import com.cargps.mobile.TripAccessResolution
+import com.cargps.mobile.TripAccessState
+import com.cargps.mobile.blockedOrNull
 import com.cargps.storage.CompletedTripRecord
 import java.util.Locale
 
@@ -70,9 +77,10 @@ private val PaceGreen = Color(0xFF34D399)
 private val WarningAmber = Color(0xFFFBBF24)
 
 @Composable
-fun MobileDashboardScreen(
+internal fun MobileDashboardScreen(
     state: DashboardState,
-    onRequestPermission: () -> Unit,
+    tripAccessState: TripAccessState,
+    onResolveTripAccess: () -> Unit,
     onToggleTrip: () -> Unit,
     onEndTrip: () -> Unit,
     onToggleTheme: () -> Unit,
@@ -91,15 +99,16 @@ fun MobileDashboardScreen(
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
             MobileHeader(state = state, onToggleTheme = onToggleTheme)
-            LocationHealth(state)
+            LocationHealth(state, tripAccessState)
             // 主仪表固定为紧凑高度，避免停车或无数据状态吞掉整页剩余空间。
-            SpeedTripPanel(state = state, modifier = Modifier.height(220.dp))
+            SpeedTripPanel(state = state, tripAccessState = tripAccessState, modifier = Modifier.height(220.dp))
             StatsStrip(state)
             TelemetryStrip(state)
             RecentTripsCard(state.recentTrips)
             MobileControlBar(
                 state = state,
-                onRequestPermission = onRequestPermission,
+                tripAccessState = tripAccessState,
+                onResolveTripAccess = onResolveTripAccess,
                 onToggleTrip = onToggleTrip,
                 onRequestEnd = { showEndConfirmation = true },
             )
@@ -166,8 +175,8 @@ private fun MobileHeader(state: DashboardState, onToggleTheme: () -> Unit) {
 }
 
 @Composable
-private fun LocationHealth(state: DashboardState) {
-    val (statusText, statusColor) = fixStatusPresentation(state.fixStatus)
+private fun LocationHealth(state: DashboardState, tripAccessState: TripAccessState) {
+    val (statusText, statusColor) = locationStatusPresentation(tripAccessState, state.fixStatus)
     Surface(
         modifier = Modifier.fillMaxWidth().height(60.dp),
         color = statusColor.copy(alpha = 0.10f),
@@ -183,7 +192,7 @@ private fun LocationHealth(state: DashboardState) {
             Column {
                 Text(statusText, color = statusColor, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    text = locationHealthDetail(state),
+                    text = locationHealthDetail(state, tripAccessState),
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
                     fontSize = 11.sp,
                     maxLines = 1,
@@ -199,7 +208,11 @@ private fun LocationHealth(state: DashboardState) {
 }
 
 @Composable
-private fun SpeedTripPanel(state: DashboardState, modifier: Modifier = Modifier) {
+private fun SpeedTripPanel(
+    state: DashboardState,
+    tripAccessState: TripAccessState,
+    modifier: Modifier = Modifier,
+) {
     val speed = state.speedKmh
     val stats = state.tripStats
     val progress by animateFloatAsState(
@@ -286,7 +299,12 @@ private fun SpeedTripPanel(state: DashboardState, modifier: Modifier = Modifier)
                 Row(verticalAlignment = Alignment.Top) {
                     Column(Modifier.weight(1f)) {
                         Text("当前行程", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.52f))
-                        Text(tripStatusText(state.tripMode), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = tripStatusColor(state.tripMode))
+                        Text(
+                            tripStatusText(state.tripMode, tripAccessState),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = tripStatusColor(state.tripMode),
+                        )
                         if (state.restoredTrip) {
                             Text("已恢复", fontSize = 10.sp, color = PaceGreen, fontWeight = FontWeight.SemiBold)
                         }
@@ -488,7 +506,8 @@ private fun TelemetryValue(label: String, value: String) {
 @Composable
 private fun MobileControlBar(
     state: DashboardState,
-    onRequestPermission: () -> Unit,
+    tripAccessState: TripAccessState,
+    onResolveTripAccess: () -> Unit,
     onToggleTrip: () -> Unit,
     onRequestEnd: () -> Unit,
     modifier: Modifier = Modifier,
@@ -503,14 +522,30 @@ private fun MobileControlBar(
             modifier = Modifier.fillMaxSize().padding(5.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (state.fixStatus == FixStatus.PERMISSION_REQUIRED) {
+            val blockedAccess = tripAccessState.blockedOrNull
+            if (blockedAccess != null) {
                 Button(
-                    onClick = onRequestPermission,
-                    modifier = Modifier.fillMaxSize(),
+                    onClick = onResolveTripAccess,
+                    modifier = if (state.tripMode == TripMode.IDLE) {
+                        Modifier.fillMaxSize()
+                    } else {
+                        Modifier.weight(1f).fillMaxHeight()
+                    },
                 ) {
-                    Icon(Icons.Default.LocationOn, contentDescription = null)
+                    Icon(accessActionIcon(blockedAccess), contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("授权定位并开始", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        accessActionLabel(blockedAccess),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                    )
+                }
+                if (state.tripMode != TripMode.IDLE) {
+                    EndTripButton(
+                        enabled = state.storageReady && !state.tripCommandInProgress,
+                        onRequestEnd = onRequestEnd,
+                    )
                 }
             } else {
                 Button(
@@ -534,23 +569,31 @@ private fun MobileControlBar(
                     )
                 }
                 if (state.tripMode != TripMode.IDLE) {
-                    FilledTonalButton(
-                        onClick = onRequestEnd,
+                    EndTripButton(
                         enabled = state.storageReady && !state.tripCommandInProgress,
-                        modifier = Modifier.width(112.dp).fillMaxHeight(),
-                        contentPadding = PaddingValues(horizontal = 10.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
-                            contentColor = MaterialTheme.colorScheme.error,
-                        ),
-                    ) {
-                        Icon(Icons.Default.Stop, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
-                        Text("结束", fontWeight = FontWeight.Bold, maxLines = 1)
-                    }
+                        onRequestEnd = onRequestEnd,
+                    )
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun EndTripButton(enabled: Boolean, onRequestEnd: () -> Unit) {
+    FilledTonalButton(
+        onClick = onRequestEnd,
+        enabled = enabled,
+        modifier = Modifier.width(112.dp).fillMaxHeight(),
+        contentPadding = PaddingValues(horizontal = 10.dp),
+        colors = ButtonDefaults.filledTonalButtonColors(
+            containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.14f),
+            contentColor = MaterialTheme.colorScheme.error,
+        ),
+    ) {
+        Icon(Icons.Default.Stop, contentDescription = null)
+        Spacer(Modifier.width(4.dp))
+        Text("结束", fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
@@ -574,13 +617,28 @@ private fun fixStatusPresentation(status: FixStatus): Pair<String, Color> = when
 }
 
 @Composable
+private fun locationStatusPresentation(
+    tripAccessState: TripAccessState,
+    fixStatus: FixStatus,
+): Pair<String, Color> = when (tripAccessState.blockedOrNull?.blocker) {
+    TripAccessBlocker.LOCATION_PERMISSION_REQUIRED -> "需要定位授权" to MaterialTheme.colorScheme.error
+    TripAccessBlocker.LOCATION_PERMISSION_PERMANENTLY_DENIED -> "定位权限已拒绝" to MaterialTheme.colorScheme.error
+    TripAccessBlocker.PRECISE_LOCATION_REQUIRED -> "当前仅有大致位置" to WarningAmber
+    TripAccessBlocker.SYSTEM_LOCATION_DISABLED -> "系统定位已关闭" to MaterialTheme.colorScheme.error
+    TripAccessBlocker.NOTIFICATION_PERMISSION_REQUIRED -> "需要行程通知权限" to WarningAmber
+    TripAccessBlocker.NOTIFICATION_PERMISSION_PERMANENTLY_DENIED -> "行程通知已关闭" to WarningAmber
+    null -> fixStatusPresentation(fixStatus)
+}
+
+@Composable
 private fun tripStatusColor(mode: TripMode): Color = when (mode) {
     TripMode.IDLE -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.56f)
     TripMode.RECORDING -> PaceGreen
     TripMode.PAUSED -> WarningAmber
 }
 
-private fun locationHealthDetail(state: DashboardState): String = state.foregroundServiceError ?: state.storageError?.let { error ->
+private fun locationHealthDetail(state: DashboardState, tripAccessState: TripAccessState): String =
+    tripAccessDetail(tripAccessState) ?: state.foregroundServiceError ?: state.storageError?.let { error ->
     "行程存储异常：$error"
 } ?: when (state.fixStatus) {
     FixStatus.PERMISSION_REQUIRED -> "允许精确定位后才能读取车速与行程"
@@ -592,10 +650,42 @@ private fun locationHealthDetail(state: DashboardState): String = state.foregrou
     FixStatus.LOST -> "速度与里程停止更新"
 }
 
-private fun tripStatusText(mode: TripMode): String = when (mode) {
-    TripMode.IDLE -> "等待开始"
-    TripMode.RECORDING -> "记录中"
-    TripMode.PAUSED -> "已暂停"
+private fun tripAccessDetail(state: TripAccessState): String? = when (state.blockedOrNull?.blocker) {
+    TripAccessBlocker.LOCATION_PERMISSION_REQUIRED -> "允许精确定位后才能读取速度并记录行程"
+    TripAccessBlocker.LOCATION_PERMISSION_PERMANENTLY_DENIED -> "请在应用设置中开启精确位置信息"
+    TripAccessBlocker.PRECISE_LOCATION_REQUIRED -> "大致位置不足以可靠计算速度和里程"
+    TripAccessBlocker.SYSTEM_LOCATION_DISABLED -> "请在系统设置中开启位置信息"
+    TripAccessBlocker.NOTIFICATION_PERMISSION_REQUIRED -> "允许通知后才能明确显示后台记录状态"
+    TripAccessBlocker.NOTIFICATION_PERMISSION_PERMANENTLY_DENIED -> "请在通知设置中开启行程记录通知"
+    null -> null
+}
+
+private fun tripStatusText(mode: TripMode, tripAccessState: TripAccessState): String = when {
+    mode != TripMode.IDLE && tripAccessState.blockedOrNull != null -> "记录受阻"
+    mode == TripMode.IDLE -> "等待开始"
+    mode == TripMode.RECORDING -> "记录中"
+    else -> "已暂停"
+}
+
+private fun accessActionLabel(state: TripAccessState.Blocked): String = when (state.resolution) {
+    TripAccessResolution.REQUEST_LOCATION_PERMISSION -> when (state.blocker) {
+        TripAccessBlocker.PRECISE_LOCATION_REQUIRED -> "改为精确定位"
+        else -> "允许精确定位"
+    }
+    TripAccessResolution.REQUEST_NOTIFICATION_PERMISSION -> "允许行程通知"
+    TripAccessResolution.OPEN_APP_SETTINGS -> "打开应用设置"
+    TripAccessResolution.OPEN_LOCATION_SETTINGS -> "开启系统定位"
+    TripAccessResolution.OPEN_NOTIFICATION_SETTINGS -> "打开通知设置"
+}
+
+private fun accessActionIcon(state: TripAccessState.Blocked) = when (state.resolution) {
+    TripAccessResolution.REQUEST_LOCATION_PERMISSION -> Icons.Default.MyLocation
+    TripAccessResolution.REQUEST_NOTIFICATION_PERMISSION,
+    TripAccessResolution.OPEN_NOTIFICATION_SETTINGS,
+    -> Icons.Default.Notifications
+    TripAccessResolution.OPEN_APP_SETTINGS,
+    TripAccessResolution.OPEN_LOCATION_SETTINGS,
+    -> Icons.Default.Settings
 }
 
 private fun satelliteText(state: DashboardState): String = when {

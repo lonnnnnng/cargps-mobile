@@ -47,10 +47,13 @@ class TripRecordingServiceSecurityTest {
     @Test
     fun notificationPendingIntentsAreExplicitAndImmutable() {
         val startIntent = TripRecordingService.startTripIntent(context)
+        val ensureIntent = TripRecordingService.ensureActiveTripIntent(context)
         val endIntent = TripRecordingService.endTripIntent(context)
 
         assertEquals(ComponentName(context, TripRecordingService::class.java), startIntent.component)
         assertEquals(TripRecordingService.ACTION_START_TRIP, startIntent.action)
+        assertEquals(ComponentName(context, TripRecordingService::class.java), ensureIntent.component)
+        assertEquals(TripRecordingService.ACTION_ENSURE_ACTIVE_TRIP, ensureIntent.action)
         assertEquals(ComponentName(context, TripRecordingService::class.java), endIntent.component)
         assertEquals(TripRecordingService.ACTION_END_TRIP, endIntent.action)
 
