@@ -1,6 +1,6 @@
 # 手机版验证产物
 
-本目录只存放 `com.cargps.mobile` 在 `Pixel_9` 上产生的本地验证资料。除本说明外，其余文件默认不进入 Git。
+本目录存放 `com.cargps.mobile` 在 `Pixel_9` 和跨 API 模拟器上产生的本地验证资料。除本说明外，其余文件默认不进入 Git；所有设备命令都显式指定 serial，不操作 Redmi 真机。
 
 ## 当前验证
 
@@ -15,6 +15,10 @@
 - `cargps-mobile-m2-notification.xml`、`cargps-mobile-m2-notification-expanded.png`：`location` 前台服务通知及“结束行程”操作。
 - `cargps-mobile-m2-after-update.xml`、`cargps-mobile-m2-notification-ended.xml`：覆盖安装触发进程重建后的活动行程恢复，以及从通知结束后回到空闲状态的证据。
 - `cargps-mobile-m3-after-sigkill.png`、`cargps-mobile-m3-after-sigkill.xml`：活动行程进程被 `SIGKILL` 后由 `START_STICKY` 自动重建的 Pixel_9 画面和 UI 树，显示“记录中 / 已恢复”。
+- `cargps-mobile-api27-v020-before.db`、`cargps-mobile-api27-upgraded-after.db`：API 27 Debug 同签名覆盖升级前后的 SQLite v3/Room v4 数据库，39 点、33.50 米保持不变。
+- `cargps-mobile-api29-v020-before.db`、`cargps-mobile-api29-upgraded-after.db`：API 29 Debug 同签名覆盖升级前后的数据库，29 点、33.50 米保持不变。
+- `cargps-mobile-api27-release-v020-before.db`、`cargps-mobile-api27-release-upgraded-after.db`：API 27 公开正式 `v0.2.0` 覆盖当前同证书 Release 前后的数据库，29 点、37.62 米保持不变。
+- `cargps-mobile-api29-release-v020-before.db`、`cargps-mobile-api29-release-upgraded-after.db`：API 29 公开正式 `v0.2.0` 覆盖当前同证书 Release 前后的数据库，30 点、28.74 米保持不变。
 - `release-v0.2.0/CarGPS-Mobile-v0.2.0.apk`：`0.2.0 (3)` 正式签名 APK，SHA-256 为 `8fc1238c1fdc45db0e49d3d78243abdfe834fe15e87008e53004ae3eea366bc2`。
 - `release-v0.2.0/Pixel_9-v0.2.0.png`、`Pixel_9-v0.2.0.xml`：正式包安装后的 Pixel_9 画面和 UI 树，滚动节点数量为 0。
 

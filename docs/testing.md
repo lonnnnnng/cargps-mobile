@@ -2,7 +2,7 @@
 
 作者：long
 
-更新日期：2026-08-08 06:02:40（北京时间，UTC+8）
+更新日期：2026-08-08 06:44:50（北京时间，UTC+8）
 
 ## 测试分层
 
@@ -99,7 +99,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 系统 `ApplicationExitInfo` 记录 `reason=SIGNALED`、`status=9`，随后自动创建新 PID `9355`，`restartCount=1`；未手工启动 Service。
 - 新进程恢复为 `START_STICKY`、`isForeground=true`、类型 `0x00000008`，通知仍为“CarGPS · 正在记录”，定位线程仍为 1；Activity 回前台显示“记录中 / 已恢复”。
 - 从 UI 结束行程后通知与 Service 清除，界面回到空闲，crash buffer 为空。证据为 `artifacts/cargps-mobile-m3-after-sigkill.png` 和 `.xml`。
-- 该结果证明普通进程信号终止后的确认边界恢复，不证明 `onTaskRemoved()` 异步检查点必然完成，也不证明 `force-stop`、断电或未确认内存尾批零丢失；API 27/API 29 仍待设备验收。
+- 该结果证明普通进程信号终止后的确认边界恢复，不证明 `onTaskRemoved()` 异步检查点必然完成，也不证明 `force-stop`、断电或未确认内存尾批零丢失；API 27/API 29 后续已完成同类聚焦恢复，设备重启、低存储和尾批损失量化仍待验收。
 
 ## M4 Room 与数据损坏回归
 
@@ -108,7 +108,9 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - Room 迁移覆盖 v1 到 v4 活动行程与轨迹、v2 到 v4 已结束行程与历史轨迹、v3 到 v4 暂停行程，并验证 v4 完整 `TripStorage` 事务契约和确认检查点。
 - 非法活动行程 mode 返回 `ActiveTripLoadResult.Corrupt`，数据库原始行保持不变；协调器测试验证损坏时 `storageReady = false` 且拒绝开始新行程。
 - 缺失 `total_paused` 的畸形 v3 数据库在迁移失败后仍保持版本 3、旧表结构和原始行，证明当前迁移事务不会用半成品覆盖来源库。
-- 尚未执行 API 27/API 29 升级安装回归，也不把上述 fixture 结果解释为任意文件级物理损坏都能自动恢复。
+- API 27/API 29 已完成 Debug 同签名与公开正式 `v0.2.0` 同证书两组覆盖升级：来源库均为 SQLite v3，覆盖后均为 Room v4，活动状态、开始时间、点数、距离、sequence 和点时间范围保持不变。
+- Debug 组：API 27 为 39 点/33.50 米，API 29 为 29 点/33.50 米；正式组：API 27 为 29 点/37.62 米，API 29 为 30 点/28.74 米。升级后界面均显示“记录中 / 已恢复”，前台服务和单条 `cargps-location` 线程正常。
+- 当前开发构建仍与公开旧包同为 `0.2.0 (3)`；该结果验证代码、证书和数据库迁移链，不替代最终候选提升版本号后的再次覆盖安装，也不表示任意文件级物理损坏都能自动恢复。
 
 ## M5 权限状态机回归
 
@@ -147,6 +149,16 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 设备命令始终显式指定模拟器 serial；未向 Redmi 安装、授权、清数据或执行测试。完成矩阵后已恢复可见的 `Pixel_9 / API 35`。
 - 本轮是聚焦短路径，不计作 30 分钟后台长测；API 31 镜像尚未安装，位置首次/永久拒绝、系统定位关闭和设置返回仍需按各版本补齐。
 
+## 2026-08-08 正式旧包跨 API 覆盖升级
+
+- 公开 `v0.2.0` APK 与当前 Release APK 的证书 SHA-256 均为 `7807a35ea864ad038b6f3851b79333e8aedd90bb7f9521fd5ffb0d7c0375d521`。
+- API 27：旧正式包创建 SQLite v3 活动行程，29 点、37.62 米；覆盖当前 Release 后数据库升级为 Room v4，`RECORDING`、开始时间、点数、距离、sequence 与点时间范围全部保持，界面显示“记录中 / 已恢复”。
+- API 29：旧正式包创建 SQLite v3 活动行程，30 点、28.74 米；覆盖当前 Release 后数据库升级为 Room v4，同一组活动行程字段完整保留，界面、前台服务、通知和单定位线程恢复正常。
+- Room v4 的 identity hash 为 `f87ebb25691d962beb3c76e9a6f9a505`。数据库证据为 `artifacts/cargps-mobile-api27-release-v020-before.db`、`cargps-mobile-api27-release-upgraded-after.db`、`cargps-mobile-api29-release-v020-before.db` 和 `cargps-mobile-api29-release-upgraded-after.db`。
+- 两个 APK 当前都报告 `versionName = 0.2.0`、`versionCode = 3`。正式发布前必须提升版本号，用最终候选 APK 再跑一次 API 27/API 29 覆盖升级，并复核证书、版本、数据和前台恢复。
+- 文档同步后的完整本地关卡再次通过，包含 JVM、AndroidTest 编译、lint、lintVital、Debug/Release、R8、资源压缩和 benchmark 构建；随后在显式确认的 `Pixel_9 / API 35 / emulator-5554` 上通过 `gps-core` 12/12 与手机版 6/6 instrumentation。
+- Pixel_9 首次普通可见启动后模拟器进程退出，Gradle 报 `Connected device with serial 'emulator-5554' not found!`；使用受管可见模式重启同一 AVD 后全部通过。该失败属于模拟器可用性，不是应用断言失败。
+
 ## v0.2.0 发布验收
 
 - 提交与 tag：`0995eb2` / `v0.2.0`；发布时工作区与 `origin/main` 同步。
@@ -157,4 +169,4 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 对齐与优化：Build Tools 36 的 `zipalign -c -P 16 4` 通过；APK 内含 `assets/dexopt/baseline.prof` 和 `baseline.profm`。
 - 安装：正式包在 `Pixel_9` / API 35 冷启动成功；UI 树滚动节点为 0，crash buffer 为空。切换 debug 到 release 签名时仅清除了该模拟器内的测试数据。
 
-尚未完成的 API 31、跨 API 完整位置权限矩阵、30 分钟后台记录、正式旧包覆盖升级、设备重启、低存储和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用上述聚焦短路径替代。
+尚未完成的 API 31、跨 API 完整位置权限矩阵、30 分钟后台记录、最终候选版本号与签名升级复验、设备重启、低存储和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用上述聚焦短路径替代。

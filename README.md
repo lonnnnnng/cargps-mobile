@@ -27,11 +27,13 @@ mobile/
 - Git 提交：`0995eb2`
 - 安装包：`CarGPS-Mobile-v0.2.0.apk`，版本 `0.2.0 (3)`
 - SHA-256：`8fc1238c1fdc45db0e49d3d78243abdfe834fe15e87008e53004ae3eea366bc2`
-- 当前开发线：`v0.2.0` 之后的 M1-M7；M1-M7 已提交并完成 Pixel_9 核心验证，API 27/29/33 聚焦回归也已通过。尚未打 tag 或发布。
+- 当前开发线：`v0.2.0` 之后的 M1-M7；M1-M7 已提交并完成 Pixel_9 核心验证，API 27/29/33 聚焦回归也已通过。
+- API 27/API 29 已完成公开正式 `v0.2.0` 到当前同签名 Release 的覆盖升级，活动行程从 SQLite v3 无损迁移到 Room v4。
+- 当前开发构建仍沿用 `0.2.0 (3)`；下一版本号、tag 和 Release 尚未确定，也不能把当前验证表述为新版本已经发布。
 
 ## 验证设备
 
-- AVD：`Pixel_9`，当前 serial 为 `emulator-5554`；执行设备命令前必须用 `ro.boot.qemu.avd_name` 复核映射。
+- AVD：`Pixel_9`；serial 由模拟器启动顺序动态分配，执行设备命令前必须用 `ro.boot.qemu.avd_name` 复核映射，不能只记住 `emulator-5554`。
 - 方向：竖屏
 - 应用包名：`com.cargps.mobile`
 - 日常安装、UI 和性能验证以 `Pixel_9` 为准；跨版本兼容性另使用 `CASKA_1024x600 / API 27`、`CarGPS_Pixel_9_API29` 和 `CarGPS_Pixel_9_API33`，不把这些 AVD 当作发布视觉基线。
@@ -65,10 +67,11 @@ mobile/
 - 本地签名文件没有从车机项目复制；Release 构建仍通过 `ANDROID_SIGNING_*` 环境变量注入签名。
 - M2 已在 API 27/API 29 完成开始、Home、单定位线程、结束和资源清理短路径；连续 30 分钟与真实道路长测仍是发布前风险门禁。
 - M3 已在 Pixel_9、API 27 和 API 29 通过普通进程 `SIGKILL` 恢复验证；恢复上限是最后确认检查点，最多约 1 秒的内存尾批仍不承诺零丢点，`force-stop` 也不会被描述为普通系统恢复。
-- M4 的 Room v1-v4、事务契约、损坏护栏和失败回滚已在 API 27/29/33 各通过 12/12 instrumentation；正式 `v0.2.0` 旧包覆盖升级仍待验收。
+- M4 的 Room v1-v4、事务契约、损坏护栏和失败回滚已在 API 27/29/33 各通过 12/12 instrumentation；API 27/API 29 上公开正式 `v0.2.0` 覆盖当前同证书 Release 后，活动状态、开始时间、点数、距离和点序列均保持不变。
 - M5 策略实现、11 个 JVM 场景和 Pixel_9 完整权限矩阵已通过；API 29 仅粗略定位、API 33 通知首次/永久拒绝也已实机化验证。API 31 与跨版本完整位置拒绝/设置返回仍未完成。
 - M6 已提交为 `19fa99c`：单一 `Channel.UNLIMITED` 事件队列固定先恢复，Service 通过统一定位策略区分可见预览、Start 等待和已确认活动行程。本地 44/44 与 24/24 JVM、完整构建关卡、Pixel_9 instrumentation 12/12 与 6/6，以及开始/重复 ensure/结束短路径均已通过。
 - M7 已在 Pixel_9 重新生成 50,591 行 Baseline Profile 和 49,417 行 Startup Profile，旧 `DashboardViewModel` 类名命中为 0；Release APK 内含新的 `baseline.prof` 与 `baseline.profm`。两轮冷启动对照中 Profile 中位数分别比无预编译快约 17.4% 和 18.2%。下一版仍必须完成跨 API 30 分钟回归；真实设备 2 小时长测继续分阶段推进，AGP 9 保持延后。
+- 正式候选生成后必须先提升 `versionCode`/`versionName`，再用最终签名 APK 重跑旧包覆盖升级；当前同版本号构建的验证只证明代码、签名和数据迁移链可行。
 
 ## 文档与验证资料
 

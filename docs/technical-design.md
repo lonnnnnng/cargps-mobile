@@ -83,7 +83,7 @@ flowchart LR
 - Service 使用常驻低优先级通知，提供返回应用和结束行程的显式不可变 `PendingIntent`；通知按模式、每 10 米或最多每 5 秒刷新，避免每秒重建 SystemUI 视图。
 - Manifest 已声明 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_LOCATION` 和 `android:foregroundServiceType="location"`；Activity 与 Service 在启动、恢复和系统状态变化时使用统一 `TripAccessState` 检查精确位置、GPS Provider 和 API 33+ 通知权限。
 - API 27 不需要 `ACCESS_BACKGROUND_LOCATION`，该权限从 API 29 才出现。当前 M2 不申请后台位置；只有未来确需从后台创建定位服务时才单独评审该权限和系统豁免。
-- M2 核心实现及 Pixel_9 / API 35 短路径已验证，但 API 27/API 29、连续锁屏 30 分钟和真实道路长测未完成，因此尚不能把跨版本后台记录标记为已正式交付。
+- M2 核心实现及 Pixel_9 / API 35、API 27、API 29 聚焦短路径已验证；API 27/API 29 还完成了活动行程覆盖升级后的前台服务恢复。连续 30 分钟 Home/切换应用/锁屏和真实道路长测仍未完成，因此尚不能把跨版本后台记录标记为已正式交付。
 - 系统以 `START_STICKY` 重建 Service 时先升为“正在确认行程存储”前台状态，并等待 `DashboardRuntime.awaitInitialRestore()`；只有恢复完成且存在活动行程时才重启定位，没有活动行程或恢复失败后才停止 Service。
 - 权限请求历史只用于区分首次请求与后续拒绝；Activity 在权限回调、设置返回、`onResume()` 和 Provider 广播后重新读取系统状态。设置返回不自动开始行程，活动行程受阻时停止定位并保留用户结束行程的入口。
 
@@ -109,6 +109,7 @@ flowchart LR
 - UI：无权限、仅近似、永久拒绝、系统定位关闭、通知拒绝、无数据、缺海拔、弱定位、过期、超长坐标文本，以及 `Pixel_9` 竖屏安全区和单屏无滚动约束。
 - 服务：Manifest 私有性、`location` 类型、权限声明、显式 Intent 和不可变 `PendingIntent`；`LocationEnginePolicy` 统一区分可见定位预览、Start 等待和已确认活动行程，客户端不可见时只有活动行程可启动后台定位。运行时覆盖启动编排确认、失败清理、Home、锁屏、Activity 重建、通知结束与单定位线程；可见页面的定位预览可以在 Start 确认前运行，但 Runtime 仍为 `IDLE` 时不会把样本写入行程。
 - 恢复：用应用自身 UID 向活动行程进程发送 `SIGKILL`，验证系统以 null Intent 重建 `START_STICKY` Service、等待存储、恢复前台通知和单定位线程；`force-stop` 单独建模，不算普通恢复。
+- 升级：使用公开 `v0.2.0` 正式 APK 生成真实 SQLite v3 活动行程，再用同证书候选 APK 覆盖安装，验证 Room v4 迁移、活动状态、点数、距离、确认边界和前台服务恢复；最终发布候选提升版本号后必须重复该流程。
 - 性能：Baseline Profile 以两个独立场景采集：首屏启动进入 Baseline 与 Startup Profile，完整行程场景覆盖开始、Home、Activity/Service 重绑、暂停、继续和结束。Macrobenchmark 在同一 Pixel_9 上同时记录无预编译与强制 Baseline Profile 的冷启动 TTID；模拟器结果只用于相对比较。当前 Profile 已移除旧 ViewModel 类名并命中新事件队列、Service、定位策略和 Room 热路径。
 - 设备：安装、UI 和功能验证显式指定 `Pixel_9`，不操作 Redmi 真机；任何安装命令都不能依赖 adb 默认设备。
 
@@ -128,4 +129,4 @@ flowchart LR
 
 剩余工作不能按“权限补丁”或“升版本”孤立推进。前台服务已经改变定位会话所有权，Room 已经改变写入确认和进程恢复语义；M5 跨 API 权限验收与 M6 事件队列的集成验证仍会影响服务能否启动及尾点能否可靠落库。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
 
-M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，M4 已完成 Room schema v4、旧版本显式迁移和损坏状态护栏。M5 权限状态机与 M6 单一事件队列已经提交，并通过本地关卡、Pixel_9 / API 35 以及 API 27/29/33 聚焦验证；M7 Baseline/Startup Profile 已完成 Pixel_9 重采和两轮冷启动对照。下一步集中完成 API 31、跨 API 完整位置权限矩阵、30 分钟后台回归、正式旧包覆盖升级和真实设备 2 小时长测；M8 AGP 9 继续独立延后。
+M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，M4 已完成 Room schema v4、旧版本显式迁移、损坏状态护栏，以及 API 27/API 29 的公开正式旧包覆盖升级。M5 权限状态机与 M6 单一事件队列已经提交，并通过本地关卡、Pixel_9 / API 35 以及 API 27/29/33 聚焦验证；M7 Baseline/Startup Profile 已完成 Pixel_9 重采和两轮冷启动对照。下一步集中完成 API 31、跨 API 完整位置权限矩阵、API 27/29/35 的 30 分钟后台回归、设备重启/低存储/尾批损失量化、最终候选提升版本号后的覆盖升级复验，以及取得单独授权后的真实设备 2 小时长测；M8 AGP 9 继续独立延后。

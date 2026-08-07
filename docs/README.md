@@ -1,13 +1,13 @@
 # 手机版资料索引
 
-本目录只保存 CarGPS 手机版的产品、技术和发布文档。视觉与功能验收设备为 `Pixel_9` 竖屏模拟器；当前命令显式指定经 AVD 名称复核的 `emulator-5554`，不使用 Redmi 真机。
+本目录只保存 CarGPS 手机版的产品、技术和发布文档。视觉与功能验收设备为 `Pixel_9` 竖屏模拟器；serial 由启动顺序动态分配，每次命令都先复核 AVD 名称并显式指定，不使用 Redmi 真机。
 
 ## 产品与技术
 
 - [产品规格](./product-spec.md)：单屏无滚动信息层级、交互、布局和安装边界。
 - [技术设计](./technical-design.md)：定位前台服务、共享运行时、行程确认、持久化和 Pixel_9 测试重点。
 - [测试与性能基线](./testing.md)：本地、Pixel_9、Baseline Profile 与 Macrobenchmark 命令及当前基线。
-- [剩余高风险迁移项](./migration-risks.md)：M1-M7 落地证据、下一版发布阻断项，以及跨 API、长测和 AGP 9 的剩余顺序与验收门槛。
+- [剩余高风险迁移项](./migration-risks.md)：M1-M7 落地证据、API 27/29 正式旧包升级结论、下一版发布阻断项，以及跨 API、长测和 AGP 9 的剩余顺序与验收门槛。
 - [ADR-0001](./adr/0001-use-platform-locationmanager.md)：拆分基线继续采用系统 `LocationManager`，后续架构升级由手机版独立验证。
 
 ## 发布记录
