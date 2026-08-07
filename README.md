@@ -10,6 +10,7 @@ CarGPS 手机版是独立的竖屏离线 GPS 仪表项目，包名为 `com.cargp
 
 ```text
 mobile/
+├── baselineprofile/ # Pixel_9 Baseline Profile 与冷启动 Macrobenchmark
 ├── gps-core/      # 手机版独立的定位、NMEA、速度和行程领域逻辑
 ├── mobile-app/    # 竖屏手机版，包名 com.cargps.mobile
 ├── docs/
@@ -18,7 +19,7 @@ mobile/
 └── settings.gradle.kts
 ```
 
-拆分基线暂时保留原有 `minSdk = 27`、`compileSdk = 34` 和功能行为，避免项目迁移引入回归。后续手机版可以独立提高 SDK、依赖版本和性能策略，不再与 Android 8.1 车机版同步升级。
+手机版当前保留 `minSdk = 27`，独立升级到 `compileSdk/targetSdk = 36`、AGP `8.13.2`、Gradle `8.13` 和 Kotlin/Compose Compiler `2.3.21`。车机版仍按 Android 8.1 / API 27 独立维护，不与本项目同步升级。
 
 ## 验证设备
 
@@ -34,7 +35,11 @@ mobile/
 - 支持开始、暂停、继续、结束行程，并统计里程、总时长、移动时长和停车时长。
 - 使用系统 `LocationManager`、GNSS 和 NMEA，不依赖 Google Play Services。
 - 使用本地 SQLite 保存活动行程、暂停状态、历史统计和轨迹点。
+- 使用 O(1) 增量行程累计器，长行程不在仪表 ViewModel 中保留完整轨迹列表。
+- 定位、NMEA 与卫星回调在专用线程处理，NMEA 以 500ms 窗口聚合后更新界面。
+- 轨迹点按最多 16 点或 1 秒批量事务落库，并把存储异常反馈到仪表状态。
 - 提供无需滚动的单屏紧凑仪表、底部行程控制和常显定位遥测。
+- Release 启用 R8、资源压缩和 Baseline Profile。
 
 ## 项目边界
 
@@ -49,13 +54,16 @@ mobile/
 - [资料索引](./docs/README.md)
 - [产品规格](./docs/product-spec.md)
 - [Android 技术设计](./docs/technical-design.md)
+- [测试与性能基线](./docs/testing.md)
 - [ADR-0001：采用系统 LocationManager](./docs/adr/0001-use-platform-locationmanager.md)
-- [当前 Pixel_9 验证截图](./artifacts/cargps-split-mobile.png)
+- [当前 Pixel_9 升级验证截图](./artifacts/cargps-mobile-upgrade-pixel9.png)
 - [截图、UI 树与发布产物说明](./artifacts/README.md)
 
 ## 常用验证命令
 
 ```zsh
 ./gradlew :gps-core:testDebugUnitTest
-./gradlew :mobile-app:lintDebug :mobile-app:assembleDebug
+./gradlew :mobile-app:lintDebug :mobile-app:assembleDebug :mobile-app:assembleRelease
+ANDROID_SERIAL=emulator-5554 ./gradlew :gps-core:connectedDebugAndroidTest :mobile-app:connectedDebugAndroidTest
+ANDROID_SERIAL=emulator-5554 ./gradlew :mobile-app:generateReleaseBaselineProfile
 ```

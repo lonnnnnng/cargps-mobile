@@ -40,7 +40,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,7 +64,6 @@ import com.cargps.DashboardViewModel
 import com.cargps.FixStatus
 import com.cargps.TripMode
 import com.cargps.storage.CompletedTripRecord
-import kotlinx.coroutines.delay
 import java.util.Locale
 
 private val PaceGreen = Color(0xFF34D399)
@@ -78,16 +76,8 @@ fun MobileDashboardScreen(
     onToggleTrip: () -> Unit,
     onEndTrip: () -> Unit,
     onToggleTheme: () -> Unit,
-    onTick: (Long) -> Unit,
 ) {
     var showEndConfirmation by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            onTick(System.currentTimeMillis())
-            delay(1_000L)
-        }
-    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -525,6 +515,7 @@ private fun MobileControlBar(
             } else {
                 Button(
                     onClick = onToggleTrip,
+                    enabled = state.storageReady,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 ) {
                     Icon(
@@ -545,6 +536,7 @@ private fun MobileControlBar(
                 if (state.tripMode != TripMode.IDLE) {
                     FilledTonalButton(
                         onClick = onRequestEnd,
+                        enabled = state.storageReady,
                         modifier = Modifier.width(112.dp).fillMaxHeight(),
                         contentPadding = PaddingValues(horizontal = 10.dp),
                         colors = ButtonDefaults.filledTonalButtonColors(
@@ -588,7 +580,9 @@ private fun tripStatusColor(mode: TripMode): Color = when (mode) {
     TripMode.PAUSED -> WarningAmber
 }
 
-private fun locationHealthDetail(state: DashboardState): String = when (state.fixStatus) {
+private fun locationHealthDetail(state: DashboardState): String = state.storageError?.let { error ->
+    "行程存储异常：$error"
+} ?: when (state.fixStatus) {
     FixStatus.PERMISSION_REQUIRED -> "允许精确定位后才能读取车速与行程"
     FixStatus.LOCATION_DISABLED -> "请在系统设置中开启位置信息"
     FixStatus.SEARCHING -> "请移动到开阔位置，首次定位可能需要稍候"

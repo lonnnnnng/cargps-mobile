@@ -9,6 +9,7 @@ import com.cargps.domain.TripStats
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -95,8 +96,38 @@ class SqliteTripStorageInstrumentedTest {
             val history = storage.recentTrips()
             assertEquals(1, history.size)
             assertEquals(restored.points, storage.completedTripPoints(history.single().id))
+            assertTrue(completedTripIndexExists())
         }
     }
+
+    @Test
+    fun batchedPointsKeepInsertionOrderAcrossReopen() {
+        val points = List(1_000) { index ->
+            TripPoint(
+                timestampMillis = index * 500L,
+                speedMps = 8.0,
+                distanceFromPreviousMeters = 4.0,
+                moving = true,
+            )
+        }
+
+        SqliteTripStorage(context, DATABASE_NAME).use { storage ->
+            storage.startTrip(1_000L)
+            storage.appendPoints(points)
+        }
+
+        SqliteTripStorage(context, DATABASE_NAME).use { storage ->
+            assertEquals(points, requireNotNull(storage.loadActiveTrip()).points)
+        }
+    }
+
+    private fun completedTripIndexExists(): Boolean =
+        context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->
+            db.rawQuery(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
+                arrayOf("completed_trip_ended_at_idx"),
+            ).use { cursor -> cursor.moveToFirst() }
+        }
 
     private fun createVersionOneDatabase() {
         context.openOrCreateDatabase(DATABASE_NAME, Context.MODE_PRIVATE, null).use { db ->

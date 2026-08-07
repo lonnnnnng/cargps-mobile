@@ -61,12 +61,17 @@ class SqliteTripStorage(
             """.trimIndent(),
         )
         createCompletedPointTable(db)
+        createCompletedTripIndex(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             // 作者：long｜v1 已保存活动点，升级只新增历史轨迹表，不能通过重建数据库丢弃用户未结束的行程。
             createCompletedPointTable(db)
+        }
+        if (oldVersion < 3) {
+            // 作者：long｜历史列表始终按结束时间倒序读取，升级时补索引避免记录增长后每次全表排序。
+            createCompletedTripIndex(db)
         }
     }
 
@@ -138,7 +143,19 @@ class SqliteTripStorage(
 
     @Synchronized
     override fun appendPoint(point: TripPoint) {
-        writableDatabase.insertOrThrow(
+        insertPoint(writableDatabase, point)
+    }
+
+    @Synchronized
+    override fun appendPoints(points: List<TripPoint>) {
+        if (points.isEmpty()) return
+        writableDatabase.inTransaction { db ->
+            points.forEach { point -> insertPoint(db, point) }
+        }
+    }
+
+    private fun insertPoint(db: SQLiteDatabase, point: TripPoint) {
+        db.insertOrThrow(
             TABLE_ACTIVE_POINT,
             null,
             ContentValues().apply {
@@ -275,6 +292,12 @@ class SqliteTripStorage(
         )
     }
 
+    private fun createCompletedTripIndex(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS completed_trip_ended_at_idx ON completed_trip(ended_at DESC, id DESC)",
+        )
+    }
+
     private inline fun SQLiteDatabase.inTransaction(block: (SQLiteDatabase) -> Unit) {
         beginTransaction()
         try {
@@ -296,7 +319,7 @@ class SqliteTripStorage(
 
     companion object {
         private const val DEFAULT_DATABASE_NAME = "cargps-trips.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
         private const val TABLE_ACTIVE_TRIP = "active_trip"
         private const val TABLE_ACTIVE_POINT = "active_point"
         private const val TABLE_COMPLETED_TRIP = "completed_trip"

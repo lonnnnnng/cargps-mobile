@@ -4,6 +4,8 @@ import com.cargps.TripMode
 import com.cargps.domain.TripPoint
 import com.cargps.domain.TripStats
 import java.io.Closeable
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 data class ActiveTripRecord(
     val mode: TripMode,
@@ -21,11 +23,18 @@ data class CompletedTripRecord(
 )
 
 interface TripStorage : Closeable {
+    val errors: Flow<Throwable>
+        get() = emptyFlow()
+
     fun loadActiveTrip(): ActiveTripRecord?
 
     fun startTrip(startedAtMillis: Long)
 
     fun appendPoint(point: TripPoint)
+
+    fun appendPoints(points: List<TripPoint>) {
+        points.forEach(::appendPoint)
+    }
 
     fun updateActiveTrip(
         mode: TripMode,

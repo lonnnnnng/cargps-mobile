@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "CarGpsMobile"
 include(":gps-core")
 include(":mobile-app")
+include(":baselineprofile")

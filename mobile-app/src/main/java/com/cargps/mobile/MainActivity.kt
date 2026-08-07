@@ -10,12 +10,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.cargps.DashboardViewModel
 import com.cargps.DashboardViewModelFactory
 import com.cargps.LocationEngine
 import com.cargps.domain.NmeaFrame
 import com.cargps.mobile.ui.MobileDashboardScreen
 import com.cargps.mobile.ui.MobileGpsTheme
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity(), LocationEngine.Listener {
     private val viewModel: DashboardViewModel by viewModels {
@@ -36,6 +41,14 @@ class MainActivity : ComponentActivity(), LocationEngine.Listener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         locationEngine = LocationEngine(this, this)
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    viewModel.onTick(System.currentTimeMillis())
+                    delay(1_000L)
+                }
+            }
+        }
         setContent {
             val state = viewModel.state.collectAsStateWithLifecycle().value
             MobileGpsTheme(darkTheme = state.darkTheme) {
@@ -52,7 +65,6 @@ class MainActivity : ComponentActivity(), LocationEngine.Listener {
                     onToggleTrip = { viewModel.toggleTrip(System.currentTimeMillis()) },
                     onEndTrip = { viewModel.endTrip(System.currentTimeMillis()) },
                     onToggleTheme = viewModel::toggleTheme,
-                    onTick = viewModel::onTick,
                 )
             }
         }
@@ -73,6 +85,11 @@ class MainActivity : ComponentActivity(), LocationEngine.Listener {
     override fun onStop() {
         locationEngine.stop()
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        locationEngine.close()
+        super.onDestroy()
     }
 
     override fun onPermissionRequired() = viewModel.onPermissionRequired()

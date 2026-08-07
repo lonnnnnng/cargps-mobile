@@ -2,20 +2,27 @@ package com.cargps
 
 import android.location.Location
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.cargps.domain.LocationQualityGate
 import com.cargps.domain.LocationSample
 import com.cargps.domain.NmeaFrame
 import com.cargps.domain.NmeaSentenceType
 import com.cargps.domain.SpeedEstimator
+import com.cargps.domain.TripAccumulator
 import com.cargps.domain.TripPoint
 import com.cargps.domain.TripStats
-import com.cargps.domain.TripStatsCalculator
 import com.cargps.storage.CompletedTripRecord
 import com.cargps.storage.NoOpTripStorage
 import com.cargps.storage.TripStorage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -57,16 +64,19 @@ data class DashboardState(
     val tripStats: TripStats = EMPTY_TRIP_STATS,
     val recentTrips: List<CompletedTripRecord> = emptyList(),
     val restoredTrip: Boolean = false,
+    val storageReady: Boolean = false,
+    val storageError: String? = null,
     val darkTheme: Boolean = true,
 )
 
 class DashboardViewModel(
     private val storage: TripStorage = NoOpTripStorage,
     private val nowProvider: () -> Long = System::currentTimeMillis,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
     private val qualityGate = LocationQualityGate()
     private val speedEstimator = SpeedEstimator()
-    private val points = mutableListOf<TripPoint>()
+    private val tripAccumulator = TripAccumulator()
     private var previousSample: LocationSample? = null
     private var previousAndroidLocation: Location? = null
     private var tripStartedAtMillis: Long? = null
@@ -77,6 +87,11 @@ class DashboardViewModel(
     val state: StateFlow<DashboardState> = _state.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            storage.errors.collectLatest { error ->
+                update { copy(storageError = error.message ?: error.javaClass.simpleName) }
+            }
+        }
         restorePersistedState()
     }
 
@@ -128,7 +143,7 @@ class DashboardViewModel(
                 distanceFromPreviousMeters = distanceMeters,
                 moving = statsSpeedMps >= MOVING_THRESHOLD_MPS,
             )
-            points += point
+            tripAccumulator.append(point)
             storage.appendPoint(point)
         }
 
@@ -198,9 +213,10 @@ class DashboardViewModel(
     }
 
     fun toggleTrip(nowMillis: Long) {
+        if (!_state.value.storageReady) return
         when (_state.value.tripMode) {
             TripMode.IDLE -> {
-                points.clear()
+                tripAccumulator.reset()
                 tripStartedAtMillis = nowMillis
                 pausedAtMillis = null
                 totalPausedMillis = 0L
@@ -228,6 +244,7 @@ class DashboardViewModel(
                 // 作者：long｜暂停恢复后断开两个定位点，避免把暂停期间位移补算成直线里程。
                 previousSample = null
                 previousAndroidLocation = null
+                tripAccumulator.breakSegment()
                 storage.updateActiveTrip(TripMode.RECORDING, null, totalPausedMillis)
                 update { copy(tripMode = TripMode.RECORDING) }
             }
@@ -235,19 +252,14 @@ class DashboardViewModel(
     }
 
     fun endTrip(nowMillis: Long) {
-        if (_state.value.tripMode == TripMode.IDLE) return
+        if (!_state.value.storageReady || _state.value.tripMode == TripMode.IDLE) return
         val startedAtMillis = tripStartedAtMillis ?: return
         if (_state.value.tripMode == TripMode.PAUSED) {
             totalPausedMillis += nowMillis - (pausedAtMillis ?: nowMillis)
             // 作者：long｜结束前清除实时暂停基准，防止统计函数再次把同一段暂停时间计入扣减。
             pausedAtMillis = null
         }
-        val finalStats = TripStatsCalculator.calculate(
-            startAtMillis = startedAtMillis,
-            endAtMillis = nowMillis,
-            points = points,
-            pausedMillis = totalPausedMillis,
-        )
+        val finalStats = tripAccumulator.snapshot(startedAtMillis, nowMillis, totalPausedMillis)
         storage.completeTrip(
             CompletedTripRecord(
                 startedAtMillis = startedAtMillis,
@@ -262,10 +274,10 @@ class DashboardViewModel(
             copy(
                 tripMode = TripMode.IDLE,
                 tripStats = finalStats,
-                recentTrips = storage.recentTrips(),
                 restoredTrip = false,
             )
         }
+        refreshRecentTrips()
     }
 
     fun toggleTheme() = update { copy(darkTheme = !darkTheme) }
@@ -282,18 +294,36 @@ class DashboardViewModel(
         } else {
             0L
         }
-        return TripStatsCalculator.calculate(startedAt, nowMillis, points, livePausedMillis)
+        return tripAccumulator.snapshot(startedAt, nowMillis, livePausedMillis)
     }
 
     private fun restorePersistedState() {
-        val recentTrips = storage.recentTrips()
-        val activeTrip = storage.loadActiveTrip()
+        viewModelScope.launch {
+            try {
+                val (recentTrips, activeTrip) = withContext(ioDispatcher) {
+                    storage.recentTrips() to storage.loadActiveTrip()
+                }
+                applyPersistedState(recentTrips, activeTrip)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                // 作者：long｜恢复失败时保持存储门禁关闭并显示原因，避免用户在未知数据库状态上继续开始行程。
+                update { copy(storageReady = false, storageError = error.storageMessage()) }
+            }
+        }
+    }
+
+    private fun applyPersistedState(
+        recentTrips: List<CompletedTripRecord>,
+        activeTrip: com.cargps.storage.ActiveTripRecord?,
+    ) {
         if (activeTrip == null) {
-            update { copy(recentTrips = recentTrips) }
+            update { copy(recentTrips = recentTrips, storageReady = true) }
             return
         }
 
-        points += activeTrip.points
+        tripAccumulator.restore(activeTrip.points)
+        tripAccumulator.breakSegment()
         tripStartedAtMillis = activeTrip.startedAtMillis
         pausedAtMillis = activeTrip.pausedAtMillis
         totalPausedMillis = activeTrip.totalPausedMillis
@@ -310,17 +340,29 @@ class DashboardViewModel(
             copy(
                 nowMillis = nowMillis,
                 tripMode = activeTrip.mode,
-                tripStats = TripStatsCalculator.calculate(
-                    startAtMillis = activeTrip.startedAtMillis,
-                    endAtMillis = nowMillis,
-                    points = activeTrip.points,
-                    pausedMillis = livePausedMillis,
-                ),
+                tripStats = tripAccumulator.snapshot(activeTrip.startedAtMillis, nowMillis, livePausedMillis),
                 recentTrips = recentTrips,
                 restoredTrip = true,
+                storageReady = true,
             )
         }
     }
+
+    private fun refreshRecentTrips() {
+        viewModelScope.launch {
+            try {
+                val recentTrips = withContext(ioDispatcher) { storage.recentTrips() }
+                update { copy(recentTrips = recentTrips) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                // 作者：long｜历史刷新失败不覆盖已显示记录，只反馈存储异常，保留当前行程结束结果。
+                update { copy(storageError = error.storageMessage()) }
+            }
+        }
+    }
+
+    private fun Throwable.storageMessage(): String = message ?: javaClass.simpleName
 
     private inline fun update(block: DashboardState.() -> DashboardState) {
         _state.value = _state.value.block()
