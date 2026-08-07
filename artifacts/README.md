@@ -19,6 +19,7 @@
 - `cargps-mobile-api29-v020-before.db`、`cargps-mobile-api29-upgraded-after.db`：API 29 Debug 同签名覆盖升级前后的数据库，29 点、33.50 米保持不变。
 - `cargps-mobile-api27-release-v020-before.db`、`cargps-mobile-api27-release-upgraded-after.db`：API 27 公开正式 `v0.2.0` 覆盖当前同证书 Release 前后的数据库，29 点、37.62 米保持不变。
 - `cargps-mobile-api29-release-v020-before.db`、`cargps-mobile-api29-release-upgraded-after.db`：API 29 公开正式 `v0.2.0` 覆盖当前同证书 Release 前后的数据库，30 点、28.74 米保持不变。
+- `cargps-mobile-api31-*.xml`：API 31 初始未授权、真实 Approximate/Precise 升级、首次/永久拒绝、应用设置返回、系统定位开关、前台记录、锁屏返回、活动行程撤权及受阻结束证据。
 - `release-v0.2.0/CarGPS-Mobile-v0.2.0.apk`：`0.2.0 (3)` 正式签名 APK，SHA-256 为 `8fc1238c1fdc45db0e49d3d78243abdfe834fe15e87008e53004ae3eea366bc2`。
 - `release-v0.2.0/Pixel_9-v0.2.0.png`、`Pixel_9-v0.2.0.xml`：正式包安装后的 Pixel_9 画面和 UI 树，滚动节点数量为 0。
 
@@ -31,6 +32,6 @@
 
 发布目录中的校验文件只列 `CarGPS-Mobile-*.apk`。移动或替换 APK 后必须重新运行 SHA-256 校验，不能把旧摘要当作新构建证据。
 
-M2 的 30 分钟后台监测在第 5 个一分钟样本后被外部 `force-stop` 中断；系统退出记录为 `USER REQUESTED / FORCE STOP`，crash buffer 为空。该次监测既不计为通过，也不计为应用崩溃，不能替代 API 27/API 29、完整 30 分钟或真实道路长测。
+M2 的 30 分钟后台监测在第 5 个一分钟样本后被外部 `force-stop` 中断；系统退出记录为 `USER REQUESTED / FORCE STOP`，crash buffer 为空。该次监测既不计为通过，也不计为应用崩溃，不能替代 API 27/API 29/API 35 的完整 30 分钟或真实道路长测。
 
 M3 破坏性验证使用应用自身 UID 对 PID `9235` 发送 `SIGKILL`。系统记录为 `SIGNALED / status=9`，随后自动创建 PID `9355`；未手工重启 Service，新进程恢复为 `location` 前台类型、通知持续存在、定位线程为 1，UI 显示“已恢复”，结束行程后通知和 Service 正常清除，crash buffer 为空。该场景不会先等待 `onTaskRemoved()` 的异步检查点请求，恢复结果以最近一次已确认批次为上限。
