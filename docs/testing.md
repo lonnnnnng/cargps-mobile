@@ -2,7 +2,7 @@
 
 作者：long
 
-更新日期：2026-08-08 05:23:04（北京时间，UTC+8）
+更新日期：2026-08-08 06:02:40（北京时间，UTC+8）
 
 ## 测试分层
 
@@ -117,7 +117,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - Pixel_9 / API 35：`gps-core` instrumentation 12/12、手机版 6/6；设置 Intent、初始未授权单屏无滚动和活动行程阻断后保留结束入口均通过。
 - 真实系统 UI 已验证精确、仅近似、近似升级拒绝、定位首次/永久拒绝、通知首次/永久拒绝、通知设置返回和系统定位关闭/恢复；所有失败路径均未自动开始行程或循环弹窗。
 - 设备证据为 `artifacts/cargps-mobile-m5-*` 的 PNG/XML；命令显式锁定 `emulator-5554` 并复核 `ro.boot.qemu.avd_name = Pixel_9`，未操作 Redmi。
-- API 27/29/31/33 权限矩阵仍未验收，不能用 API 35 结果外推。
+- API 27 已覆盖无位置权限与精确定位，API 29 已覆盖仅粗略定位，API 33 已覆盖通知首次/永久拒绝；API 31 和各版本完整位置拒绝、系统定位及设置返回矩阵仍未验收。
 
 ## M6 单一事件队列回归
 
@@ -126,7 +126,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 本地完整关卡通过：`gps-core` 44/44、手机版 24/24 JVM；AndroidTest 编译、`lintDebug`、`lintVitalRelease`、Debug/Release、R8、资源压缩和 `baselineprofile:assembleBenchmarkRelease` 均成功。
 - Pixel_9 / API 35 instrumentation：`gps-core` 12/12、手机版 6/6。设备由 `emulator-5554` 的 `ro.boot.qemu.avd_name = Pixel_9` 明确确认。
 - Pixel_9 运行时短路径：开始后 UI 为“记录中”，Service 为 `location` 前台类型；以应用 UID 连续两次 ensure 后 `cargps-location` 线程仍为 1；结束后回到“等待开始”且历史增加一段，Home 后 Service 清除，crash buffer 无 CarGPS 记录。
-- 尚未完成 API 27/API 29 的 `START_STICKY` 恢复、完整 30 分钟 Home/切换应用/锁屏、设备重启/低存储和真实设备 2 小时长测；Pixel_9 短路径不能替代这些门槛。
+- API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；完整 30 分钟 Home/切换应用/锁屏、设备重启/低存储和真实设备 2 小时长测仍未完成，短路径不能替代这些门槛。
 
 ## M7 Baseline Profile 与冷启动对照
 
@@ -138,6 +138,15 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - `v0.2.0` 历史无预编译中位为 241.9ms；当前 M1-M6 无预编译中位约 306-313ms，说明运行时架构扩展带来启动成本。Profile 能显著回收当前构建的启动开销，但不能据此宣称整体启动无回退。
 - 上述数据来自未锁 CPU 的模拟器，只能作为同一 Pixel_9 AVD 的相对证据，不能外推真机绝对性能。
 
+## 2026-08-08 跨 API 27/29/33 聚焦回归
+
+- API 27：`CASKA_1024x600` / Android 8.1，`gps-core` 12/12、手机版 6/6 instrumentation 通过。首轮曾因测试直接调用 API 29 才加入的 `ServiceInfo.getForegroundServiceType()` 触发 `NoSuchMethodError`；测试现仅在 API 29+ 查询类型，API 27/28 继续验证私有 Service 和权限声明。
+- API 27 运行时：未授权阻断、精确定位后开始、Home、前台通知、单条 `cargps-location` 线程通过；活动行程从 PID `3424` 经 `SIGKILL` 恢复为 `3618`，`restartCount = 1`，Activity 显示“记录中 / 已恢复”；结束后本地历史为 1 段，Home 后 Service 和定位线程清除。
+- API 29：`CarGPS_Pixel_9_API29` / Android 10，`gps-core` 12/12、手机版 6/6 instrumentation 通过。仅授予粗略定位时显示“当前仅有大致位置”，授予精确定位后可开始。可 root 的 `google_apis` AVD 发送真实 `SIGKILL`，PID `3587` 恢复为 `4159`，前台服务、单定位线程和“已恢复”状态通过；结束和 Home 后清理通过。
+- API 33：`CarGPS_Pixel_9_API33` / Android 13，`gps-core` 12/12、手机版 6/6 instrumentation 通过。通知首次拒绝后保持可重试；第二次拒绝的系统按钮为 `deny_and_dont_ask_again`，权限标志包含 `USER_FIXED`，界面切换为“行程通知已关闭 / 打开通知设置”；重新授权后可开始前台行程并显示“CarGPS · 正在记录”。
+- 设备命令始终显式指定模拟器 serial；未向 Redmi 安装、授权、清数据或执行测试。完成矩阵后已恢复可见的 `Pixel_9 / API 35`。
+- 本轮是聚焦短路径，不计作 30 分钟后台长测；API 31 镜像尚未安装，位置首次/永久拒绝、系统定位关闭和设置返回仍需按各版本补齐。
+
 ## v0.2.0 发布验收
 
 - 提交与 tag：`0995eb2` / `v0.2.0`；发布时工作区与 `origin/main` 同步。
@@ -148,4 +157,4 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 对齐与优化：Build Tools 36 的 `zipalign -c -P 16 4` 通过；APK 内含 `assets/dexopt/baseline.prof` 和 `baseline.profm`。
 - 安装：正式包在 `Pixel_9` / API 35 冷启动成功；UI 树滚动节点为 0，crash buffer 为空。切换 debug 到 release 签名时仅清除了该模拟器内的测试数据。
 
-尚未完成的 M2-M6 跨 API 运行时、权限、恢复、生命周期并发与长测，以及设备重启、低存储和真实设备场景见 [剩余高风险迁移项](./migration-risks.md)，不能用上述 Pixel_9 / API 35 短路径结果替代。
+尚未完成的 API 31、跨 API 完整位置权限矩阵、30 分钟后台记录、正式旧包覆盖升级、设备重启、低存储和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用上述聚焦短路径替代。

@@ -33,7 +33,10 @@ class TripRecordingServiceSecurityTest {
         }
 
         assertFalse(serviceInfo.exported)
-        assertTrue(serviceInfo.foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION != 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // 作者：long｜前台服务类型查询从 API 29 才开放；API 27/28 仍验证私有 Service 和权限声明，避免测试自身调用不存在的方法。
+            assertTrue(serviceInfo.foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION != 0)
+        }
 
         val requestedPermissions = context.packageManager.getPackageInfo(
             context.packageName,
