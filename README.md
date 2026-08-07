@@ -4,6 +4,8 @@ CarGPS 手机版是独立的竖屏离线 GPS 仪表项目，包名为 `com.cargp
 
 公开仓库：[lonnnnnng/cargps-mobile](https://github.com/lonnnnnng/cargps-mobile)
 
+车机版仓库：[lonnnnnng/cargps](https://github.com/lonnnnnng/cargps)
+
 ## 工程结构
 
 ```text
