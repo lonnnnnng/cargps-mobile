@@ -150,6 +150,28 @@ class TripSessionCoordinatorTest {
     }
 
     @Test
+    fun `结束前尾点纳入统计而结束后到达的点被拒绝`() = runTest {
+        val storage = FakeTripStorage()
+        val coordinator = coordinator(storage)
+        coordinator.dispatch(TripSessionCommand.Restore)
+        coordinator.dispatch(TripSessionCommand.Start(1_000L))
+        val tailPoint = TripPoint(2_000L, 4.0, 12.0, true)
+
+        val acceptedTail = coordinator.dispatch(TripSessionCommand.AppendPoint(tailPoint))
+        val ended = coordinator.dispatch(TripSessionCommand.End(3_000L))
+        val latePoint = coordinator.dispatch(
+            TripSessionCommand.AppendPoint(TripPoint(3_100L, 4.0, 8.0, true)),
+        )
+
+        assertTrue(acceptedTail is TripSessionResult.Accepted)
+        assertTrue(ended is TripSessionResult.Confirmed)
+        assertTrue(latePoint is TripSessionResult.Rejected)
+        assertEquals(12.0, storage.recent.single().stats.distanceMeters, 0.001)
+        assertEquals(1, storage.operationCounts["append"])
+        coordinator.close()
+    }
+
+    @Test
     fun `多次暂停恢复只扣除真实暂停时长`() = runTest {
         val storage = FakeTripStorage()
         val coordinator = coordinator(storage)

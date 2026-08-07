@@ -2,11 +2,11 @@
 
 作者：long
 
-更新时间：2026-08-07 23:06:25（北京时间，UTC+8）
+更新时间：2026-08-08 00:51:03（北京时间，UTC+8）
 
 ## 1. 当前基线
 
-`v0.2.0` 已完成依赖升级、增量行程统计、定位回调线程化、SQLite 批量写入、R8、Baseline Profile 和 Pixel_9 发布验证。`v0.2.0` 之后已完成 M1 行程确认状态机、M2 定位前台服务、M3 最后确认检查点和进程重建恢复门禁，以及 M4 Room schema v4、旧版本显式迁移和数据损坏护栏；M5 权限状态机已落到当前工作树，并通过本地关卡与 Pixel_9 / API 35 权限矩阵，尚未完成跨 API 验收、提交或随新版本发布。当前继续保留 `minSdk = 27`。
+`v0.2.0` 已完成依赖升级、增量行程统计、定位回调线程化、SQLite 批量写入、R8、Baseline Profile 和 Pixel_9 发布验证。`v0.2.0` 之后的 M1-M5 已完成当前开发线的核心实现并提交；M6 单一事件队列和 Service 定位策略已通过本地完整关卡、Pixel_9 instrumentation 和开始/结束核心短路径。M1-M6 尚未随新版本发布，跨 API、长测和性能资产刷新仍未完成。当前继续保留 `minSdk = 27`。
 
 M2 已消除“Activity 退到后台就主动停止定位”的旧结构，但完整 30 分钟监测被外部 `force-stop` 中断，且 API 27/API 29 尚未设备验收。现阶段只能确认 Pixel_9 上的服务启停、Home/锁屏短路径、Activity 重建、单定位线程、进程重建后的活动行程恢复和通知结束操作，不能扩展为跨版本后台可靠性结论。
 
@@ -20,21 +20,21 @@ M2 已消除“Activity 退到后台就主动停止定位”的旧结构，但�
 | M2 | P0 | 核心已验证，待跨 API/长测/发版 | 定位前台服务 | API 27/API 29 与完整 30 分钟未验收；新进程恢复边界已由 M3 补齐 | 已跨 Android 版本可靠后台记录 |
 | M3 | P0 | 核心已验证，待跨 API/发版 | 进程异常退出与最后批次恢复 | 已恢复到最后确认检查点；最多约 1 秒内存尾批仍不保证落盘 | 杀进程、断电或 `force-stop` 零丢点 |
 | M4 | P1 | 核心已验证，待跨 API/发版 | Schema 完整性与 Room 迁移 | Room v4 与损坏门禁已落地；API 27/API 29 升级安装仍随发布候选验收 | 已在所有受支持系统完成旧库升级 |
-| M5 | P1；阻断发版 | Pixel_9 核心已验证，待跨 API/提交/发版 | 权限状态机 | API 35 系统弹窗、设置返回和阻断 UI 已验收；API 27/29/31/33 分支未验收 | 所有受支持 Android 版本的权限分支均已验证 |
-| M6 | P1；阻断发版 | 待实现与验证 | 生命周期并发与真机长测 | Start 前定位、尾点与 End 仍由独立 coroutine 投递，顺序缺少单一事件队列保证 | 最后定位点必不丢失或已验证真实道路和长时功耗 |
+| M5 | P1；阻断发版 | 已提交，待跨 API/发版 | 权限状态机 | API 35 系统弹窗、设置返回和阻断 UI 已验收；API 27/29/31/33 分支未验收 | 所有受支持 Android 版本的权限分支均已验证 |
+| M6 | P1；阻断发版 | 核心已验证，待跨 API/长测/发版 | 生命周期并发与真机长测 | 不可见 Start 等待已禁止后台定位；30 分钟、API 27/29 和真实设备仍未完成 | 最后定位点必不丢失或已验证真实道路和长时功耗 |
 | M7 | P1；阻断发版 | 待刷新 | Baseline Profile 热路径刷新 | Profile 仍含已删除类名，尚未覆盖行程开始和服务恢复 | 当前 Profile 与 M1-M6 代码一致 |
 | M8 | P2 | 延后 | AGP 9 | 构建链仍为 AGP 8.13.2，升级可能引入插件与 R8 差异 | 已迁移到最新构建系统 |
 
 ## 3. 下一版发布阻断摘要
 
-M1-M5 的核心实现已经通过 Pixel_9 / API 35 聚焦验证，但跨 API、M6 事件顺序和 M7 Profile 仍未完成，因此还不能直接发版。发布候选构建前至少完成以下四组关卡：
+M1-M5 的核心实现已经通过本地关卡和 Pixel_9 / API 35 聚焦验证并提交；M6 事件队列与 Service 定位策略已进入当前开发基线，但跨 API、长测与 M7 Profile 仍未完成，因此还不能直接发版。发布候选构建前至少完成以下四组关卡：
 
 1. **跨 API 运行时**：在 API 27、API 29 和 API 35 完成 30 分钟 Home、切换应用、锁屏和停止回归；API 27/API 29 还要覆盖活动行程 `START_STICKY` 恢复。
 2. **权限最小闭环**：覆盖精确、仅近似、首次拒绝、永久拒绝、系统定位关闭、Android 13+ 通知拒绝和设置返回收敛；所有失败分支都不得循环请求或误显示“正在记录”。
-3. **事件顺序与生命周期并发**：用单一 Channel/事件队列串行化 Start、AppendPoint、Pause、Resume、End、Tick 和 Checkpoint；Service 必须等待 Start 存储确认后再启动定位，并覆盖尾点与 End、恢复与首点的竞态测试。
+3. **事件顺序与生命周期并发**：确认客户端不可见且 Start 等待时保持停止、可见页面只保留定位预览、活动行程在后台继续定位；复核单一 Channel/事件队列按 FIFO 串行化 Start、AppendPoint、Pause、Resume、End、Tick 和 Checkpoint，并覆盖尾点与 End、恢复与首点、双击 Toggle、队列关闭与失败传播。
 4. **性能资产一致性**：在 M1-M6 最终代码上重新生成 Baseline Profile，确认已删除的 `DashboardViewModel`、`DashboardViewModelFactory` 不再出现，并补行程开始与服务恢复热路径。
 
-Room 全量迁移已经完成，不再列为剩余工作。真实设备 2 小时长测和 AGP 9 仍需分阶段推进，不能与权限/并发阻断修复塞入同一次架构改动。真实设备测试必须取得单独设备授权；当前 `Pixel_9` 授权不能自动扩展到 Redmi。
+Room schema 与显式迁移实现已经完成，不再新增数据库架构改造；API 27/API 29 升级安装仍属于跨 API 发布关卡。真实设备 2 小时长测和 AGP 9 仍需分阶段推进，不能与权限/并发阻断修复塞入同一次架构改动。真实设备测试必须取得单独设备授权；当前 `Pixel_9` 授权不能自动扩展到 Redmi。
 
 ## 4. 推荐迁移顺序
 
@@ -124,12 +124,27 @@ Pixel_9 / API 35 验证证据：`gps-core` instrumentation 12/12、手机版 6/6
 
 ### M6 生命周期并发与真实设备长测
 
-当前缺口：Service 目前先启动 `LocationEngine` 再异步确认 Start，首个定位点可能在行程进入记录状态前到达；定位点和 End 分别由独立 coroutine 投递，协调器的 Mutex 只能保证互斥执行，不能把调用先后固化为可测试的事件顺序。`onTaskRemoved()` 检查点仍是尽力执行，不能承诺进程回收前完成。
+当前实现：
 
-改造边界：
+- `TripSessionEventQueue` 使用唯一 `Channel.UNLIMITED` actor，启动后固定先执行 Restore，再按入队顺序处理 Start、AppendPoint、Pause、Resume、End、Tick 和 Checkpoint。
+- `DashboardRuntime.startTripAndAwait()` 等待协调器确认并同步发布 `DashboardState` 后返回；`TripStartOrchestrator` 的直接启动回调只在 Start 确认且权限仍可用时执行。
+- `LocationEnginePolicy` 把 Service 状态归一为 `IDLE`、`START_PENDING` 和 `ACTIVE`：客户端不可见时只有 `ACTIVE` 可启动后台定位；客户端可见且定位权限可用时，`IDLE` 与 `START_PENDING` 仍保留仪表定位预览。
+- 定位点、时钟、切换、结束和生命周期检查点已改为进入同一队列；Toggle 在消费时读取最新行程模式，避免入队时使用过期模式。
+- 队列关闭会取消当前和缓冲区中的等待型命令；actor 未预期异常会关闭入口、失败等待者并拒绝后续事件，不能继续“假接收”。
+- `onTaskRemoved()` 检查点仍是尽力执行，不能承诺进程回收前完成；队列只保证单进程内顺序，不提供跨进程 exactly-once 语义。
 
-- 使用单一 Channel/事件队列串行处理 Start、AppendPoint、Pause、Resume、End、Tick 和 Checkpoint；Service 等待 Start 存储确认后再启动定位，避免 `TripAccumulator`、UI state 与数据库命令交错。
-- 覆盖冷启动恢复期间首个定位点、Activity 重建、服务重连、暂停与定位同时发生、结束与尾批次冲刷同时发生。
+验证证据：
+
+- 2026-08-08 本地 `gps-core` 44/44、手机版 24/24 JVM 通过；AndroidTest 编译、lint、lintVital、Debug/Release、R8、资源压缩和 benchmark 构建全部成功。
+- `TripSessionEventQueueTest` 5/5，覆盖 Restore/FIFO、等待型 Start、关闭取消、actor 异常终止和连续 Toggle；协调器测试确认结束前尾点进入统计、End 后点明确拒绝，Runtime 测试确认等待型 Start 返回前已发布记录状态。
+- `TripStartOrchestratorTest` 4/4，覆盖纯编排回调在确认前不调用 `startLocation`、Start 失败、等待期间权限失效和异常清理请求中标记；它不等价于 Service 全路径竞态测试。
+- `LocationEnginePolicyTest` 5/5；修复前“不可见 Start 等待”稳定得到 `expected:<STOP> but was:<START>`，策略只允许 `ACTIVE` 后连续 3 次聚焦回归通过，同时保留可见空闲/等待预览。
+- Pixel_9 / API 35：`gps-core` instrumentation 12/12、手机版 6/6；开始后为 `location` 前台服务，应用 UID 连续两次 ensure 后定位线程仍为 1，结束后历史增加一段，Home 后 Service 清除，crash buffer 无 CarGPS 记录。
+
+尚未验证的边界：
+
+- 可见页面的定位预览按产品语义可在 Start 确认前运行，不能把“定位引擎已运行”直接等价为“行程已开始”；正式候选仍需在设备上复核预览样本不会在 Runtime `IDLE` 时写入活动行程。
+- 冷启动恢复与首点、Activity 重建、服务重连和 `onTaskRemoved()` 并发仍需在完整 30 分钟关卡及 API 27/API 29 上复核。
 - 在前台服务和存储迁移完成后进行真实道路与静止长测，模拟器 Macrobenchmark 只保留为版本间相对基线。
 
 验收门槛：至少一台 Android 12 以上手机和一台 API 27 环境完成 2 小时记录；收集定位点完整率、数据库增长、CPU、内存、耗电、温升、ANR 和崩溃。真实设备是否使用 Redmi 需由用户单独授权，不能沿用 Pixel_9 授权范围。
@@ -148,6 +163,6 @@ AGP 9 属于构建链迁移，不是当前最紧迫的运行时风险。应在 M
 
 ## 5. 发布门禁
 
-M1-M6 的发布候选必须先通过第 3 节四组阻断关卡。即使通过，发布说明仍必须保留以下边界：模拟器性能不代表真机；恢复上限是最后确认检查点而非零丢点；`force-stop`、断电、设备重启和低存储不属于当前已验证恢复结论；Room 迁移已完成但跨 API 升级安装、跨 API 权限矩阵和真实道路长测仍未完成。
+下一发布候选必须先通过第 3 节四组阻断关卡。即使通过，发布说明仍必须保留以下边界：模拟器性能不代表真机；事件队列只保证单进程内顺序；恢复上限是最后确认检查点而非零丢点；`force-stop`、断电、设备重启和低存储不属于当前已验证恢复结论；Room 迁移已完成但跨 API 升级安装、跨 API 权限矩阵和真实道路长测仍未完成。
 
 每完成一个迁移项，应同步更新本文件状态、技术设计、测试基线和发布说明，并把对应自动化与设备证据放到 `artifacts/`，不能只修改计划文字。

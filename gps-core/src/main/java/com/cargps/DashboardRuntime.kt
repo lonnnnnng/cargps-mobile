@@ -15,7 +15,9 @@ import com.cargps.storage.TripStorage
 import com.cargps.session.TripPersistenceState
 import com.cargps.session.TripSessionCommand
 import com.cargps.session.TripSessionCoordinator
+import com.cargps.session.TripSessionEventQueue
 import com.cargps.session.TripSessionResult
+import com.cargps.session.TripSessionState
 import java.io.Closeable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -103,26 +105,18 @@ class DashboardRuntime(
         nowProvider = nowProvider,
         storageDispatcher = ioDispatcher,
     )
+    private val tripEvents = TripSessionEventQueue(
+        scope = runtimeScope,
+        currentMode = { sessionCoordinator.state.value.mode },
+        dispatch = sessionCoordinator::dispatch,
+        onResult = ::handleSessionResult,
+    )
 
     init {
         runtimeScope.launch {
             sessionCoordinator.state.collect { sessionState ->
-                update {
-                    copy(
-                        tripMode = sessionState.mode,
-                        tripStats = sessionState.stats,
-                        recentTrips = sessionState.recentTrips,
-                        restoredTrip = sessionState.restoredTrip,
-                        storageReady = sessionState.storageReady,
-                        tripCommandInProgress = sessionState.persistence == TripPersistenceState.PROCESSING,
-                        storageError = sessionState.storageError,
-                        confirmedTripCheckpoint = sessionState.confirmedCheckpoint,
-                    )
-                }
+                publishSessionState(sessionState)
             }
-        }
-        runtimeScope.launch {
-            handleSessionResult(sessionCoordinator.dispatch(TripSessionCommand.Restore))
         }
     }
 
@@ -178,9 +172,7 @@ class DashboardRuntime(
                 distanceFromPreviousMeters = distanceMeters,
                 moving = statsSpeedMps >= MOVING_THRESHOLD_MPS,
             )
-            runtimeScope.launch {
-                sessionCoordinator.dispatch(TripSessionCommand.AppendPoint(point))
-            }
+            tripEvents.tryDispatch(TripSessionCommand.AppendPoint(point))
         }
 
         previousSample = sample
@@ -245,45 +237,32 @@ class DashboardRuntime(
                 },
             )
         }
-        runtimeScope.launch {
-            sessionCoordinator.dispatch(TripSessionCommand.Tick(tripStatsAtMillis))
-        }
+        tripEvents.tryDispatch(TripSessionCommand.Tick(tripStatsAtMillis))
     }
 
     fun toggleTrip(nowMillis: Long) {
         if (!_state.value.storageReady || _state.value.tripCommandInProgress) return
-        runtimeScope.launch {
-            val command = when (sessionCoordinator.state.value.mode) {
-                TripMode.IDLE -> TripSessionCommand.Start(nowMillis)
-                TripMode.RECORDING -> TripSessionCommand.Pause(nowMillis)
-                TripMode.PAUSED -> TripSessionCommand.Resume(nowMillis)
-            }
-            handleSessionResult(sessionCoordinator.dispatch(command))
-        }
+        tripEvents.tryToggle(nowMillis)
     }
 
-    fun startTrip(nowMillis: Long) {
+    suspend fun startTripAndAwait(nowMillis: Long): DashboardState {
         if (!_state.value.storageReady || _state.value.tripCommandInProgress ||
             sessionCoordinator.state.value.mode != TripMode.IDLE
         ) {
-            return
+            publishSessionState(sessionCoordinator.state.value)
+            return _state.value
         }
-        runtimeScope.launch {
-            handleSessionResult(sessionCoordinator.dispatch(TripSessionCommand.Start(nowMillis)))
-        }
+        tripEvents.dispatchAndAwait(TripSessionCommand.Start(nowMillis))
+        return _state.value
     }
 
     fun endTrip(nowMillis: Long) {
         if (!_state.value.storageReady || _state.value.tripCommandInProgress) return
-        runtimeScope.launch {
-            handleSessionResult(sessionCoordinator.dispatch(TripSessionCommand.End(nowMillis)))
-        }
+        tripEvents.tryDispatch(TripSessionCommand.End(nowMillis))
     }
 
     fun checkpointTripWrites() {
-        runtimeScope.launch {
-            handleSessionResult(sessionCoordinator.dispatch(TripSessionCommand.Checkpoint))
-        }
+        tripEvents.tryDispatch(TripSessionCommand.Checkpoint)
     }
 
     fun toggleTheme() = update { copy(darkTheme = !darkTheme) }
@@ -291,16 +270,32 @@ class DashboardRuntime(
     fun onForegroundServiceError(message: String?) = update { copy(foregroundServiceError = message) }
 
     override fun close() {
+        tripEvents.close()
         runtimeJob.cancel()
         sessionCoordinator.close()
     }
 
     private fun handleSessionResult(result: TripSessionResult) {
+        // 作者：long｜等待型命令返回前同步发布确认状态，避免 Service 开启定位后首个回调仍读取旧行程模式。
+        publishSessionState(result.state)
         if (result is TripSessionResult.Confirmed && result.breakLocationSegment) {
             // 作者：long｜会话边界确认落盘后才断开定位连续段，失败时继续沿用旧会话，避免 UI 与数据库状态分叉。
             previousSample = null
             previousAndroidLocation = null
         }
+    }
+
+    private fun publishSessionState(sessionState: TripSessionState) = update {
+        copy(
+            tripMode = sessionState.mode,
+            tripStats = sessionState.stats,
+            recentTrips = sessionState.recentTrips,
+            restoredTrip = sessionState.restoredTrip,
+            storageReady = sessionState.storageReady,
+            tripCommandInProgress = sessionState.persistence == TripPersistenceState.PROCESSING,
+            storageError = sessionState.storageError,
+            confirmedTripCheckpoint = sessionState.confirmedCheckpoint,
+        )
     }
 
     private inline fun update(block: DashboardState.() -> DashboardState) {

@@ -27,7 +27,9 @@ flowchart LR
     BG --> GH["卫星与定位健康"]
     LS --> QG["样本质量门"]
     QG --> SE["速度估算与平滑"]
-    QG --> TS["TripSessionCoordinator"]
+    QG --> EQ["TripSessionEventQueue"]
+    FGS --> EQ
+    EQ --> TS["TripSessionCoordinator"]
     TS --> TA["行程累计器"]
     TS --> DB["本地行程存储"]
     TS --> RT["DashboardRuntime / StateFlow"]
@@ -68,7 +70,7 @@ flowchart LR
 - `location-quality`：位于 `gps-core`，判断样本是否可显示、是否可累计、是否发生过期或断点。
 - `speed-estimator`：位于 `gps-core`，处理速度来源选择、单位转换、异常值过滤和平滑。
 - `trip-domain`：位于 `gps-core`，`TripAccumulator` 以 O(1) 单点更新处理距离、移动时间和最高速度，只保留最后一个点与累计值。
-- `trip-session`：`TripSessionCoordinator` 是进程内唯一行程会话所有者，串行处理领域命令；界面只观察“加载中、处理中、已确认、失败”状态。
+- `trip-session`：`TripSessionEventQueue` 是进程内唯一事件入口，固定先恢复并按入队顺序交付领域命令；关闭或 actor 异常会失败等待者并停止接收。`TripSessionCoordinator` 是唯一行程会话所有者，负责存储确认和状态转换。界面只观察“加载中、处理中、已确认、失败”状态。
 - `trip-storage`：活动行程快照、已结束行程与轨迹点的本地持久化。
 - `dashboard-ui`：手机界面只消费 `gps-core` 提供的只读仪表状态，不自行计算业务统计。
 
@@ -89,7 +91,7 @@ flowchart LR
 
 - 生产装配使用 Room 2.8.4 管理本地 SQLite，schema 当前为 v4；`TripStorage` 隔离数据库实现，领域与 UI 不依赖 Room 类型。`SqliteTripStorage` 只保留为旧 schema fixture 构造和兼容性验证工具。
 - Room 注册显式 `1 -> 2`、`2 -> 3`、`3 -> 4` 迁移并导出 v4 schema，不启用 destructive fallback。v4 规范化旧表以建立 Room schema identity，但不改变统计口径或历史数据。
-- 数据库写入统一进入单线程后台队列；`TripSessionCoordinator` 串行派发恢复、历史查询和元数据确认，阻塞式存储调用切到 `Dispatchers.IO`，定位点由存储队列在后台批量落库。读取屏障只观察它之前已经入队的写入。
+- 数据库写入统一进入单线程后台队列；`TripSessionEventQueue` 固定先恢复，并按 FIFO 串行交付 Start、AppendPoint、Pause、Resume、End、Tick 和 Checkpoint，`TripSessionCoordinator` 负责历史查询和元数据确认。等待型 Start 在确认后同步发布 `DashboardState`；队列关闭或异常会唤醒等待者并拒绝新事件。阻塞式存储调用切到 `Dispatchers.IO`，定位点由存储队列在后台批量落库；读取屏障只观察它之前已经入队的写入。
 - 有效点按最多 16 点或 1 秒组成批次，在单个事务中写入；暂停、结束、读取、已执行的生命周期检查点和正常关闭前强制冲刷尾批次。`onTaskRemoved()` 只异步请求检查点，系统可能在请求完成前直接回收进程，异常退出仍存在最多约 1 秒的未确认点窗口。
 - `ActiveTripCheckpoint` 表达数据库确认边界：行程开始时间、确认点数、最后 `sequence` 和最后点时间。队列每次批量事务成功后发布该检查点，`TripSessionCoordinator` 将其映射到 `DashboardRuntime`；未冲刷点只能更新实时统计，不能进入确认边界。
 - 活动行程元数据在开始、暂停和恢复时排队写入；协调器等待写入屏障成功后才发布新模式。历史列表使用结束时间索引。
@@ -105,9 +107,9 @@ flowchart LR
 - 统计：移动/停车边界、暂停、恢复、结束、进程重建和零时长除法。
 - 长行程：十万点增量统计不溢出，`DashboardRuntime` 不持有完整轨迹；Room 千点批量写入后顺序与恢复一致。
 - UI：无权限、仅近似、永久拒绝、系统定位关闭、通知拒绝、无数据、缺海拔、弱定位、过期、超长坐标文本，以及 `Pixel_9` 竖屏安全区和单屏无滚动约束。
-- 服务：Manifest 私有性、`location` 类型、权限声明、显式 Intent 和不可变 `PendingIntent`；运行时覆盖 Home、锁屏、Activity 重建、通知结束与单定位线程。
+- 服务：Manifest 私有性、`location` 类型、权限声明、显式 Intent 和不可变 `PendingIntent`；`LocationEnginePolicy` 统一区分可见定位预览、Start 等待和已确认活动行程，客户端不可见时只有活动行程可启动后台定位。运行时覆盖启动编排确认、失败清理、Home、锁屏、Activity 重建、通知结束与单定位线程；可见页面的定位预览可以在 Start 确认前运行，但 Runtime 仍为 `IDLE` 时不会把样本写入行程。
 - 恢复：用应用自身 UID 向活动行程进程发送 `SIGKILL`，验证系统以 null Intent 重建 `START_STICKY` Service、等待存储、恢复前台通知和单定位线程；`force-stop` 单独建模，不算普通恢复。
-- 性能：Baseline Profile 覆盖首屏；Macrobenchmark 在 Pixel_9 上记录无预编译冷启动 TTID，相对比较时保持同一 AVD 配置。M2 重构后生成文件仍含已删除类名，必须重新生成后才能作为当前性能资产。
+- 性能：Baseline Profile 当前只覆盖首屏；Macrobenchmark 在 Pixel_9 上记录无预编译冷启动 TTID，相对比较时保持同一 AVD 配置。M1-M6 重构后生成文件仍含已删除类名，必须补行程开始和服务恢复热路径并重新生成，才能作为当前性能资产。
 - 设备：安装、UI 和功能验证显式指定 `Pixel_9`，不操作 Redmi 真机；任何安装命令都不能依赖 adb 默认设备。
 
 ## 9. 已验证的官方依据
@@ -124,6 +126,6 @@ flowchart LR
 
 ## 10. 后续迁移边界
 
-剩余工作不能按“权限补丁”或“升版本”孤立推进。前台服务已经改变定位会话所有权，Room 已经改变写入确认和进程恢复语义；M5 权限状态机的设备验收与 M6 事件串行化仍会影响服务能否启动及尾点能否可靠落库。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
+剩余工作不能按“权限补丁”或“升版本”孤立推进。前台服务已经改变定位会话所有权，Room 已经改变写入确认和进程恢复语义；M5 跨 API 权限验收与 M6 事件队列的集成验证仍会影响服务能否启动及尾点能否可靠落库。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
 
-M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，M4 已完成 Room schema v4、旧版本显式迁移和损坏状态护栏。M5 权限状态机已在工作树实现，并通过本地关卡与 Pixel_9 / API 35 系统权限矩阵；下一步推进 M6 单一事件队列、跨 API 长测并刷新 M7 Baseline Profile。M5 的 API 27/29/31/33 矩阵、真实设备 2 小时长测和 M8 AGP 9 分阶段推进。
+M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，M4 已完成 Room schema v4、旧版本显式迁移和损坏状态护栏。M5 权限状态机已提交，并通过本地关卡与 Pixel_9 / API 35 系统权限矩阵；M6 单一事件队列和 Service 定位策略已通过本地关卡、Pixel_9 instrumentation 和开始/结束核心短路径。下一步完成 M6 跨 API/长测并刷新 M7 Baseline Profile；M5 的 API 27/29/31/33 矩阵、真实设备 2 小时长测和 M8 AGP 9 分阶段推进。

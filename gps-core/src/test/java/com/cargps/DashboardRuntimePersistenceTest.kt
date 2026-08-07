@@ -81,6 +81,23 @@ class DashboardRuntimePersistenceTest {
     }
 
     @Test
+    fun `等待型开始返回前运行时已经发布记录状态`() = runTest(mainDispatcherRule.dispatcher) {
+        val runtime = DashboardRuntime(
+            scope = this,
+            storage = FakeTripStorage(),
+            ioDispatcher = mainDispatcherRule.dispatcher,
+        )
+        advanceUntilIdle()
+
+        val startedState = runtime.startTripAndAwait(1_000L)
+
+        assertEquals(TripMode.RECORDING, startedState.tripMode)
+        assertEquals(TripMode.RECORDING, runtime.state.value.tripMode)
+        assertFalse(startedState.tripCommandInProgress)
+        runtime.close()
+    }
+
+    @Test
     fun `暂停状态结束行程时暂停时长只累计一次`() = runTest(mainDispatcherRule.dispatcher) {
         val storage = FakeTripStorage(
             activeTrip = ActiveTripRecord(

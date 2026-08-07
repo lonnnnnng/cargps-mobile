@@ -165,8 +165,18 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             startRequested = false
             return
         }
-        locationEngine.start()
-        runtime.startTrip(System.currentTimeMillis())
+        val requestedAtMillis = System.currentTimeMillis()
+        serviceScope.launch {
+            // 作者：long｜恢复通知先满足前台服务时限；此处的显式启动回调等待 Start 落库，定位预览路径仍由可见性状态独立管理。
+            completeTripStart(
+                requestedAtMillis = requestedAtMillis,
+                awaitStart = runtime::startTripAndAwait,
+                currentAccess = ::currentTripAccessState,
+                onRequestFinished = { startRequested = false },
+                startLocation = locationEngine::start,
+                handleState = ::handleRuntimeState,
+            )
+        }
     }
 
     private fun ensureActiveTripService() {
@@ -225,14 +235,20 @@ class TripRecordingService : Service(), LocationEngine.Listener {
     private fun refreshLocationEngine() {
         val activeTrip = runtime.state.value.tripMode != TripMode.IDLE
         val access = currentTripAccessState()
-        val canPreviewLocation = clientVisible && !access.blocksLocation
-        val canRecordTrip = (activeTrip || startRequested) && access.isReady
-        if (canPreviewLocation || canRecordTrip) {
-            runtime.onForegroundServiceError(null)
-            locationEngine.start()
-        } else {
-            locationEngine.stop()
-            if (!access.isReady) reportBlockedAccess(access)
+        val sessionPhase = when {
+            activeTrip -> LocationSessionPhase.ACTIVE
+            startRequested -> LocationSessionPhase.START_PENDING
+            else -> LocationSessionPhase.IDLE
+        }
+        when (decideLocationEngineAction(clientVisible, sessionPhase, access)) {
+            LocationEngineAction.START -> {
+                runtime.onForegroundServiceError(null)
+                locationEngine.start()
+            }
+            LocationEngineAction.STOP -> {
+                locationEngine.stop()
+                if (!access.isReady) reportBlockedAccess(access)
+            }
         }
         handleRuntimeState(runtime.state.value)
     }
@@ -248,7 +264,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         val keepForeground = recoveringStartedService || activeTrip || startRequested ||
             (foreground && state.tripCommandInProgress)
         if (keepForeground && access.isReady) {
-            if (promoteToForeground(state)) locationEngine.start()
+            promoteToForeground(state)
         } else if (foreground) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             foreground = false
@@ -259,6 +275,8 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         if (activeTrip && !access.isReady) {
             locationEngine.stop()
             reportBlockedAccess(access)
+        } else if (activeTrip) {
+            locationEngine.start()
         }
 
         if (activeTrip && !access.isReady && !clientVisible) {
