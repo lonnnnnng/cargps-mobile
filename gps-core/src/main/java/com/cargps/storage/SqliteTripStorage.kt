@@ -76,8 +76,8 @@ class SqliteTripStorage(
     }
 
     @Synchronized
-    override fun loadActiveTrip(): ActiveTripRecord? {
-        val active = readableDatabase.query(
+    override fun loadActiveTrip(): ActiveTripLoadResult {
+        val activeResult = readableDatabase.query(
             TABLE_ACTIVE_TRIP,
             ACTIVE_COLUMNS,
             "id = 1",
@@ -87,14 +87,21 @@ class SqliteTripStorage(
             null,
             "1",
         ).use { cursor ->
-            if (!cursor.moveToFirst()) return null
-            val mode = runCatching { TripMode.valueOf(cursor.string("mode")) }.getOrNull() ?: return null
-            ActiveTripRecord(
-                mode = mode,
-                startedAtMillis = cursor.long("started_at"),
-                pausedAtMillis = cursor.nullableLong("paused_at"),
-                totalPausedMillis = cursor.long("total_paused"),
-                points = emptyList(),
+            if (!cursor.moveToFirst()) return ActiveTripLoadResult.Empty
+            val rawMode = cursor.string("mode")
+            val mode = runCatching { TripMode.valueOf(rawMode) }.getOrNull()
+                ?: return ActiveTripLoadResult.Corrupt(
+                    reason = "活动行程模式无法识别：$rawMode",
+                    rawMode = rawMode,
+                )
+            ActiveTripLoadResult.Loaded(
+                ActiveTripRecord(
+                    mode = mode,
+                    startedAtMillis = cursor.long("started_at"),
+                    pausedAtMillis = cursor.nullableLong("paused_at"),
+                    totalPausedMillis = cursor.long("total_paused"),
+                    points = emptyList(),
+                ),
             )
         }
         val points = readableDatabase.query(
@@ -119,7 +126,30 @@ class SqliteTripStorage(
                 }
             }
         }
-        return active.copy(points = points)
+        return ActiveTripLoadResult.Loaded(activeResult.record.copy(points = points))
+    }
+
+    @Synchronized
+    override fun loadActiveTripCheckpoint(): ActiveTripCheckpoint? = readableDatabase.rawQuery(
+        """
+        SELECT
+            started_at,
+            (SELECT COUNT(*) FROM active_point) AS confirmed_point_count,
+            (SELECT sequence FROM active_point ORDER BY sequence DESC LIMIT 1) AS last_sequence,
+            (SELECT timestamp FROM active_point ORDER BY sequence DESC LIMIT 1) AS last_timestamp
+        FROM active_trip
+        WHERE id = 1
+        LIMIT 1
+        """.trimIndent(),
+        null,
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) return null
+        ActiveTripCheckpoint(
+            startedAtMillis = cursor.long("started_at"),
+            confirmedPointCount = cursor.long("confirmed_point_count"),
+            lastConfirmedPointSequence = cursor.nullableLong("last_sequence"),
+            lastConfirmedPointTimestampMillis = cursor.nullableLong("last_timestamp"),
+        )
     }
 
     @Synchronized

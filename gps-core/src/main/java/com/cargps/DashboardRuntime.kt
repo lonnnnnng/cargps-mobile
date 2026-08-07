@@ -1,28 +1,33 @@
 package com.cargps
 
 import android.location.Location
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
 import com.cargps.domain.LocationQualityGate
 import com.cargps.domain.LocationSample
 import com.cargps.domain.NmeaFrame
 import com.cargps.domain.NmeaSentenceType
 import com.cargps.domain.SpeedEstimator
-import com.cargps.domain.TripAccumulator
 import com.cargps.domain.TripPoint
 import com.cargps.domain.TripStats
 import com.cargps.storage.CompletedTripRecord
+import com.cargps.storage.ActiveTripCheckpoint
 import com.cargps.storage.NoOpTripStorage
 import com.cargps.storage.TripStorage
+import com.cargps.session.TripPersistenceState
+import com.cargps.session.TripSessionCommand
+import com.cargps.session.TripSessionCoordinator
+import com.cargps.session.TripSessionResult
+import java.io.Closeable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -65,34 +70,64 @@ data class DashboardState(
     val recentTrips: List<CompletedTripRecord> = emptyList(),
     val restoredTrip: Boolean = false,
     val storageReady: Boolean = false,
+    val tripCommandInProgress: Boolean = false,
     val storageError: String? = null,
+    val foregroundServiceError: String? = null,
+    val confirmedTripCheckpoint: ActiveTripCheckpoint? = null,
     val darkTheme: Boolean = true,
 )
 
-class DashboardViewModel(
+/**
+ * 作者：long
+ *
+ * 手机版进程内唯一仪表与行程运行时。Activity 只观察状态，定位前台服务负责投递定位和行程命令。
+ */
+class DashboardRuntime(
+    scope: CoroutineScope,
     private val storage: TripStorage = NoOpTripStorage,
     private val nowProvider: () -> Long = System::currentTimeMillis,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-) : ViewModel() {
+) : Closeable {
+    private val runtimeJob = SupervisorJob(scope.coroutineContext[Job])
+    private val runtimeScope = CoroutineScope(scope.coroutineContext + runtimeJob)
     private val qualityGate = LocationQualityGate()
     private val speedEstimator = SpeedEstimator()
-    private val tripAccumulator = TripAccumulator()
     private var previousSample: LocationSample? = null
     private var previousAndroidLocation: Location? = null
-    private var tripStartedAtMillis: Long? = null
-    private var pausedAtMillis: Long? = null
-    private var totalPausedMillis: Long = 0L
 
     private val _state = MutableStateFlow(DashboardState())
     val state: StateFlow<DashboardState> = _state.asStateFlow()
+    private val sessionCoordinator = TripSessionCoordinator(
+        storage = storage,
+        scope = runtimeScope,
+        nowProvider = nowProvider,
+        storageDispatcher = ioDispatcher,
+    )
 
     init {
-        viewModelScope.launch {
-            storage.errors.collectLatest { error ->
-                update { copy(storageError = error.message ?: error.javaClass.simpleName) }
+        runtimeScope.launch {
+            sessionCoordinator.state.collect { sessionState ->
+                update {
+                    copy(
+                        tripMode = sessionState.mode,
+                        tripStats = sessionState.stats,
+                        recentTrips = sessionState.recentTrips,
+                        restoredTrip = sessionState.restoredTrip,
+                        storageReady = sessionState.storageReady,
+                        tripCommandInProgress = sessionState.persistence == TripPersistenceState.PROCESSING,
+                        storageError = sessionState.storageError,
+                        confirmedTripCheckpoint = sessionState.confirmedCheckpoint,
+                    )
+                }
             }
         }
-        restorePersistedState()
+        runtimeScope.launch {
+            handleSessionResult(sessionCoordinator.dispatch(TripSessionCommand.Restore))
+        }
+    }
+
+    suspend fun awaitInitialRestore(): DashboardState = state.first { dashboardState ->
+        dashboardState.storageReady || dashboardState.storageError != null
     }
 
     fun onPermissionRequired() = update { copy(fixStatus = FixStatus.PERMISSION_REQUIRED, speedKmh = null) }
@@ -143,8 +178,9 @@ class DashboardViewModel(
                 distanceFromPreviousMeters = distanceMeters,
                 moving = statsSpeedMps >= MOVING_THRESHOLD_MPS,
             )
-            tripAccumulator.append(point)
-            storage.appendPoint(point)
+            runtimeScope.launch {
+                sessionCoordinator.dispatch(TripSessionCommand.AppendPoint(point))
+            }
         }
 
         previousSample = sample
@@ -163,7 +199,6 @@ class DashboardViewModel(
                 bearingDegrees = sample.bearingDegrees,
                 accuracyMeters = sample.accuracyMeters,
                 lastFixAtMillis = sample.timestampMillis,
-                tripStats = calculateTripStats(sample.timestampMillis),
             )
         }
     }
@@ -184,15 +219,22 @@ class DashboardViewModel(
     }
 
     fun onTick(nowMillis: Long) {
+        val current = _state.value
+        val ageMillis = current.lastFixAtMillis?.let(nowMillis::minus)
+        val currentStatus = when {
+            current.fixStatus == FixStatus.PERMISSION_REQUIRED || current.fixStatus == FixStatus.LOCATION_DISABLED ->
+                current.fixStatus
+            ageMillis == null -> FixStatus.SEARCHING
+            ageMillis > 10_000L -> FixStatus.LOST
+            ageMillis > 3_000L -> FixStatus.STALE
+            else -> current.fixStatus
+        }
+        val tripStatsAtMillis = if (currentStatus == FixStatus.STALE || currentStatus == FixStatus.LOST) {
+            current.lastFixAtMillis ?: nowMillis
+        } else {
+            nowMillis
+        }
         update {
-            val ageMillis = lastFixAtMillis?.let(nowMillis::minus)
-            val currentStatus = when {
-                fixStatus == FixStatus.PERMISSION_REQUIRED || fixStatus == FixStatus.LOCATION_DISABLED -> fixStatus
-                ageMillis == null -> FixStatus.SEARCHING
-                ageMillis > 10_000L -> FixStatus.LOST
-                ageMillis > 3_000L -> FixStatus.STALE
-                else -> fixStatus
-            }
             copy(
                 nowMillis = nowMillis,
                 fixStatus = currentStatus,
@@ -201,168 +243,65 @@ class DashboardViewModel(
                     FixStatus.LOST -> null
                     else -> speedKmh
                 },
-                tripStats = calculateTripStats(
-                    if (currentStatus == FixStatus.STALE || currentStatus == FixStatus.LOST) {
-                        lastFixAtMillis ?: nowMillis
-                    } else {
-                        nowMillis
-                    },
-                ),
             )
+        }
+        runtimeScope.launch {
+            sessionCoordinator.dispatch(TripSessionCommand.Tick(tripStatsAtMillis))
         }
     }
 
     fun toggleTrip(nowMillis: Long) {
-        if (!_state.value.storageReady) return
-        when (_state.value.tripMode) {
-            TripMode.IDLE -> {
-                tripAccumulator.reset()
-                tripStartedAtMillis = nowMillis
-                pausedAtMillis = null
-                totalPausedMillis = 0L
-                previousSample = null
-                previousAndroidLocation = null
-                storage.startTrip(nowMillis)
-                update {
-                    copy(
-                        tripMode = TripMode.RECORDING,
-                        tripStats = EMPTY_TRIP_STATS,
-                        restoredTrip = false,
-                    )
-                }
+        if (!_state.value.storageReady || _state.value.tripCommandInProgress) return
+        runtimeScope.launch {
+            val command = when (sessionCoordinator.state.value.mode) {
+                TripMode.IDLE -> TripSessionCommand.Start(nowMillis)
+                TripMode.RECORDING -> TripSessionCommand.Pause(nowMillis)
+                TripMode.PAUSED -> TripSessionCommand.Resume(nowMillis)
             }
+            handleSessionResult(sessionCoordinator.dispatch(command))
+        }
+    }
 
-            TripMode.RECORDING -> {
-                pausedAtMillis = nowMillis
-                storage.updateActiveTrip(TripMode.PAUSED, pausedAtMillis, totalPausedMillis)
-                update { copy(tripMode = TripMode.PAUSED) }
-            }
-
-            TripMode.PAUSED -> {
-                totalPausedMillis += nowMillis - (pausedAtMillis ?: nowMillis)
-                pausedAtMillis = null
-                // 作者：long｜暂停恢复后断开两个定位点，避免把暂停期间位移补算成直线里程。
-                previousSample = null
-                previousAndroidLocation = null
-                tripAccumulator.breakSegment()
-                storage.updateActiveTrip(TripMode.RECORDING, null, totalPausedMillis)
-                update { copy(tripMode = TripMode.RECORDING) }
-            }
+    fun startTrip(nowMillis: Long) {
+        if (!_state.value.storageReady || _state.value.tripCommandInProgress ||
+            sessionCoordinator.state.value.mode != TripMode.IDLE
+        ) {
+            return
+        }
+        runtimeScope.launch {
+            handleSessionResult(sessionCoordinator.dispatch(TripSessionCommand.Start(nowMillis)))
         }
     }
 
     fun endTrip(nowMillis: Long) {
-        if (!_state.value.storageReady || _state.value.tripMode == TripMode.IDLE) return
-        val startedAtMillis = tripStartedAtMillis ?: return
-        if (_state.value.tripMode == TripMode.PAUSED) {
-            totalPausedMillis += nowMillis - (pausedAtMillis ?: nowMillis)
-            // 作者：long｜结束前清除实时暂停基准，防止统计函数再次把同一段暂停时间计入扣减。
-            pausedAtMillis = null
+        if (!_state.value.storageReady || _state.value.tripCommandInProgress) return
+        runtimeScope.launch {
+            handleSessionResult(sessionCoordinator.dispatch(TripSessionCommand.End(nowMillis)))
         }
-        val finalStats = tripAccumulator.snapshot(startedAtMillis, nowMillis, totalPausedMillis)
-        storage.completeTrip(
-            CompletedTripRecord(
-                startedAtMillis = startedAtMillis,
-                endedAtMillis = nowMillis,
-                stats = finalStats,
-            ),
-        )
-        tripStartedAtMillis = null
-        previousSample = null
-        previousAndroidLocation = null
-        update {
-            copy(
-                tripMode = TripMode.IDLE,
-                tripStats = finalStats,
-                restoredTrip = false,
-            )
+    }
+
+    fun checkpointTripWrites() {
+        runtimeScope.launch {
+            handleSessionResult(sessionCoordinator.dispatch(TripSessionCommand.Checkpoint))
         }
-        refreshRecentTrips()
     }
 
     fun toggleTheme() = update { copy(darkTheme = !darkTheme) }
 
-    override fun onCleared() {
-        storage.close()
-        super.onCleared()
+    fun onForegroundServiceError(message: String?) = update { copy(foregroundServiceError = message) }
+
+    override fun close() {
+        runtimeJob.cancel()
+        sessionCoordinator.close()
     }
 
-    private fun calculateTripStats(nowMillis: Long): TripStats {
-        val startedAt = tripStartedAtMillis ?: return _state.value.tripStats
-        val livePausedMillis = totalPausedMillis + if (_state.value.tripMode == TripMode.PAUSED) {
-            nowMillis - (pausedAtMillis ?: nowMillis)
-        } else {
-            0L
-        }
-        return tripAccumulator.snapshot(startedAt, nowMillis, livePausedMillis)
-    }
-
-    private fun restorePersistedState() {
-        viewModelScope.launch {
-            try {
-                val (recentTrips, activeTrip) = withContext(ioDispatcher) {
-                    storage.recentTrips() to storage.loadActiveTrip()
-                }
-                applyPersistedState(recentTrips, activeTrip)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                // 作者：long｜恢复失败时保持存储门禁关闭并显示原因，避免用户在未知数据库状态上继续开始行程。
-                update { copy(storageReady = false, storageError = error.storageMessage()) }
-            }
+    private fun handleSessionResult(result: TripSessionResult) {
+        if (result is TripSessionResult.Confirmed && result.breakLocationSegment) {
+            // 作者：long｜会话边界确认落盘后才断开定位连续段，失败时继续沿用旧会话，避免 UI 与数据库状态分叉。
+            previousSample = null
+            previousAndroidLocation = null
         }
     }
-
-    private fun applyPersistedState(
-        recentTrips: List<CompletedTripRecord>,
-        activeTrip: com.cargps.storage.ActiveTripRecord?,
-    ) {
-        if (activeTrip == null) {
-            update { copy(recentTrips = recentTrips, storageReady = true) }
-            return
-        }
-
-        tripAccumulator.restore(activeTrip.points)
-        tripAccumulator.breakSegment()
-        tripStartedAtMillis = activeTrip.startedAtMillis
-        pausedAtMillis = activeTrip.pausedAtMillis
-        totalPausedMillis = activeTrip.totalPausedMillis
-        previousSample = null
-        previousAndroidLocation = null
-
-        val nowMillis = nowProvider()
-        val livePausedMillis = activeTrip.totalPausedMillis + if (activeTrip.mode == TripMode.PAUSED) {
-            nowMillis - (activeTrip.pausedAtMillis ?: nowMillis)
-        } else {
-            0L
-        }
-        update {
-            copy(
-                nowMillis = nowMillis,
-                tripMode = activeTrip.mode,
-                tripStats = tripAccumulator.snapshot(activeTrip.startedAtMillis, nowMillis, livePausedMillis),
-                recentTrips = recentTrips,
-                restoredTrip = true,
-                storageReady = true,
-            )
-        }
-    }
-
-    private fun refreshRecentTrips() {
-        viewModelScope.launch {
-            try {
-                val recentTrips = withContext(ioDispatcher) { storage.recentTrips() }
-                update { copy(recentTrips = recentTrips) }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: Throwable) {
-                // 作者：long｜历史刷新失败不覆盖已显示记录，只反馈存储异常，保留当前行程结束结果。
-                update { copy(storageError = error.storageMessage()) }
-            }
-        }
-    }
-
-    private fun Throwable.storageMessage(): String = message ?: javaClass.simpleName
 
     private inline fun update(block: DashboardState.() -> DashboardState) {
         _state.value = _state.value.block()

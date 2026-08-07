@@ -3,6 +3,8 @@ package com.cargps
 import com.cargps.domain.TripPoint
 import com.cargps.domain.TripStats
 import com.cargps.storage.ActiveTripRecord
+import com.cargps.storage.ActiveTripCheckpoint
+import com.cargps.storage.ActiveTripLoadResult
 import com.cargps.storage.CompletedTripRecord
 import com.cargps.storage.TripStorage
 import org.junit.Assert.assertEquals
@@ -13,14 +15,21 @@ import org.junit.Test
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class DashboardViewModelPersistenceTest {
+class DashboardRuntimePersistenceTest {
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
     @Test
     fun `进程重建后恢复活动行程和已有统计`() = runTest(mainDispatcherRule.dispatcher) {
+        val checkpoint = ActiveTripCheckpoint(
+            startedAtMillis = 1_000L,
+            confirmedPointCount = 1L,
+            lastConfirmedPointSequence = 7L,
+            lastConfirmedPointTimestampMillis = 2_000L,
+        )
         val storage = FakeTripStorage(
             activeTrip = ActiveTripRecord(
                 mode = TripMode.RECORDING,
@@ -36,19 +45,39 @@ class DashboardViewModelPersistenceTest {
                     ),
                 ),
             ),
+            checkpoint = checkpoint,
         )
 
-        val viewModel = DashboardViewModel(
+        val runtime = DashboardRuntime(
+            scope = this,
             storage = storage,
             nowProvider = { 3_000L },
             ioDispatcher = mainDispatcherRule.dispatcher,
         )
         advanceUntilIdle()
 
-        assertEquals(TripMode.RECORDING, viewModel.state.value.tripMode)
-        assertTrue(viewModel.state.value.restoredTrip)
-        assertEquals(20.0, viewModel.state.value.tripStats.distanceMeters, 0.001)
-        assertEquals(2_000L, viewModel.state.value.tripStats.elapsedMillis)
+        assertEquals(TripMode.RECORDING, runtime.state.value.tripMode)
+        assertTrue(runtime.state.value.restoredTrip)
+        assertEquals(20.0, runtime.state.value.tripStats.distanceMeters, 0.001)
+        assertEquals(2_000L, runtime.state.value.tripStats.elapsedMillis)
+        assertEquals(checkpoint, runtime.state.value.confirmedTripCheckpoint)
+        runtime.close()
+    }
+
+    @Test
+    fun `前台服务恢复门禁等待初始存储结果`() = runTest(mainDispatcherRule.dispatcher) {
+        val runtime = DashboardRuntime(
+            scope = this,
+            storage = FakeTripStorage(),
+            ioDispatcher = mainDispatcherRule.dispatcher,
+        )
+
+        val restoredState = async { runtime.awaitInitialRestore() }
+        assertFalse(restoredState.isCompleted)
+        advanceUntilIdle()
+
+        assertTrue(restoredState.await().storageReady)
+        runtime.close()
     }
 
     @Test
@@ -62,45 +91,52 @@ class DashboardViewModelPersistenceTest {
                 points = emptyList(),
             ),
         )
-        val viewModel = DashboardViewModel(
+        val runtime = DashboardRuntime(
+            scope = this,
             storage = storage,
             nowProvider = { 10_000L },
             ioDispatcher = mainDispatcherRule.dispatcher,
         )
         advanceUntilIdle()
 
-        viewModel.endTrip(10_000L)
+        runtime.endTrip(10_000L)
         advanceUntilIdle()
 
-        assertEquals(TripMode.IDLE, viewModel.state.value.tripMode)
-        assertFalse(viewModel.state.value.restoredTrip)
+        assertEquals(TripMode.IDLE, runtime.state.value.tripMode)
+        assertFalse(runtime.state.value.restoredTrip)
         assertEquals(6_000L, storage.completed.single().stats.elapsedMillis)
+        runtime.close()
     }
 
     @Test
     fun `恢复读取失败时保持存储门禁并显示异常`() = runTest(mainDispatcherRule.dispatcher) {
         val storage = FakeTripStorage(loadFailure = IllegalStateException("database unavailable"))
 
-        val viewModel = DashboardViewModel(
+        val runtime = DashboardRuntime(
+            scope = this,
             storage = storage,
             ioDispatcher = mainDispatcherRule.dispatcher,
         )
         advanceUntilIdle()
 
-        assertFalse(viewModel.state.value.storageReady)
-        assertEquals("database unavailable", viewModel.state.value.storageError)
+        assertFalse(runtime.state.value.storageReady)
+        assertEquals("database unavailable", runtime.state.value.storageError)
+        runtime.close()
     }
 
     private class FakeTripStorage(
         private var activeTrip: ActiveTripRecord? = null,
         private val loadFailure: Throwable? = null,
+        private var checkpoint: ActiveTripCheckpoint? = null,
     ) : TripStorage {
         val completed = mutableListOf<CompletedTripRecord>()
 
-        override fun loadActiveTrip(): ActiveTripRecord? {
+        override fun loadActiveTrip(): ActiveTripLoadResult {
             loadFailure?.let { throw it }
-            return activeTrip
+            return activeTrip?.let(ActiveTripLoadResult::Loaded) ?: ActiveTripLoadResult.Empty
         }
+
+        override fun loadActiveTripCheckpoint(): ActiveTripCheckpoint? = checkpoint
 
         override fun startTrip(startedAtMillis: Long) {
             activeTrip = ActiveTripRecord(

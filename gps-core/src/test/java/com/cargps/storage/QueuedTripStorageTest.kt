@@ -9,6 +9,10 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
 class QueuedTripStorageTest {
     @Test
@@ -31,11 +35,11 @@ class QueuedTripStorageTest {
     }
 
     @Test
-    fun `单次写入失败不会从定位调用线程冒泡且队列继续工作`() {
+    fun `单次批量写入失败重试成功后不报告终态错误`() {
         val expected = IllegalStateException("disk full")
         val failureReported = CountDownLatch(1)
         var actualFailure: Throwable? = null
-        val delegate = RecordingTripStorage(appendFailure = expected)
+        val delegate = RecordingTripStorage(appendFailuresRemaining = 1, appendFailure = expected)
 
         QueuedTripStorage(
             delegate = delegate,
@@ -50,9 +54,48 @@ class QueuedTripStorageTest {
             storage.recentTrips()
         }
 
-        assertEquals(true, failureReported.await(1, TimeUnit.SECONDS))
-        assertSame(expected, actualFailure)
+        assertFalse(failureReported.await(150, TimeUnit.MILLISECONDS))
+        assertEquals(null, actualFailure)
         assertEquals(listOf("start", "append", "append", "pause", "close"), delegate.operations)
+    }
+
+    @Test
+    fun `批量写入连续失败时屏障抛出并报告终态错误`() {
+        val expected = IllegalStateException("disk full")
+        val failureReported = CountDownLatch(1)
+        var actualFailure: Throwable? = null
+        val delegate = RecordingTripStorage(appendFailuresRemaining = 2, appendFailure = expected)
+
+        QueuedTripStorage(
+            delegate = delegate,
+            onWriteFailure = { error ->
+                actualFailure = error
+                failureReported.countDown()
+            },
+        ).use { storage ->
+            storage.appendPoint(TripPoint(2_000L, 3.0, 4.0, true))
+
+            assertSame(expected, assertThrows(IllegalStateException::class.java) { storage.awaitPendingWrites() })
+            assertEquals(true, failureReported.await(1, TimeUnit.SECONDS))
+            storage.awaitPendingWrites()
+        }
+
+        assertSame(expected, actualFailure)
+        assertEquals(listOf("append", "append", "append", "close"), delegate.operations)
+    }
+
+    @Test
+    fun `元数据写入失败可被确认屏障捕获`() {
+        val expected = IllegalStateException("metadata failure")
+        val delegate = RecordingTripStorage(startFailure = expected)
+
+        QueuedTripStorage(delegate).use { storage ->
+            storage.startTrip(1_000L)
+
+            assertSame(expected, assertThrows(IllegalStateException::class.java) { storage.awaitPendingWrites() })
+        }
+
+        assertEquals(listOf("start", "close"), delegate.operations)
     }
 
     @Test
@@ -85,16 +128,38 @@ class QueuedTripStorageTest {
         assertEquals(listOf(1, 1, 1), delegate.batchSizes)
     }
 
+    @Test
+    fun `尾批次落库后发布最后确认轨迹边界`() = runBlocking {
+        val delegate = CheckpointRecordingTripStorage()
+
+        QueuedTripStorage(delegate).use { storage ->
+            storage.startTrip(1_000L)
+            storage.awaitPendingWrites()
+            val confirmation = async(start = CoroutineStart.UNDISPATCHED) {
+                storage.confirmedCheckpoints.first()
+            }
+
+            storage.appendPoint(TripPoint(2_000L, 3.0, 4.0, true))
+            storage.awaitPendingWrites()
+
+            assertEquals(ActiveTripCheckpoint(1_000L, 1L, 1L, 2_000L), confirmation.await())
+        }
+    }
+
     private class RecordingTripStorage(
+        private var appendFailuresRemaining: Int = 0,
         private val appendFailure: Throwable? = null,
+        private val startFailure: Throwable? = null,
     ) : TripStorage {
         val operations = mutableListOf<String>()
         val workerThreads = mutableListOf<Thread>()
-        private var appendFailuresRemaining = if (appendFailure == null) 0 else 1
 
-        override fun loadActiveTrip(): ActiveTripRecord? = null
+        override fun loadActiveTrip(): ActiveTripLoadResult = ActiveTripLoadResult.Empty
 
-        override fun startTrip(startedAtMillis: Long) = record("start")
+        override fun startTrip(startedAtMillis: Long) {
+            record("start")
+            startFailure?.let { throw it }
+        }
 
         override fun appendPoint(point: TripPoint) {
             record("append")
@@ -127,7 +192,7 @@ class QueuedTripStorageTest {
     ) : TripStorage {
         val batchSizes = mutableListOf<Int>()
 
-        override fun loadActiveTrip(): ActiveTripRecord? = null
+        override fun loadActiveTrip(): ActiveTripLoadResult = ActiveTripLoadResult.Empty
         override fun startTrip(startedAtMillis: Long) = Unit
         override fun appendPoint(point: TripPoint) = error("批量存储不应退化为单点写入")
         override fun appendPoints(points: List<TripPoint>) {
@@ -136,6 +201,34 @@ class QueuedTripStorageTest {
                 failuresRemaining -= 1
                 throw failure
             }
+        }
+        override fun updateActiveTrip(mode: TripMode, pausedAtMillis: Long?, totalPausedMillis: Long) = Unit
+        override fun completeTrip(record: CompletedTripRecord) = Unit
+        override fun recentTrips(limit: Int): List<CompletedTripRecord> = emptyList()
+        override fun completedTripPoints(tripId: Long): List<TripPoint> = emptyList()
+    }
+
+    private class CheckpointRecordingTripStorage : TripStorage {
+        private var startedAtMillis: Long? = null
+        private val points = mutableListOf<TripPoint>()
+
+        override fun loadActiveTrip(): ActiveTripLoadResult = ActiveTripLoadResult.Empty
+        override fun startTrip(startedAtMillis: Long) {
+            this.startedAtMillis = startedAtMillis
+            points.clear()
+        }
+        override fun appendPoint(point: TripPoint) = error("确认测试必须使用批量写入")
+        override fun appendPoints(points: List<TripPoint>) {
+            this.points += points
+        }
+        override fun loadActiveTripCheckpoint(): ActiveTripCheckpoint? {
+            val startedAtMillis = startedAtMillis ?: return null
+            return ActiveTripCheckpoint(
+                startedAtMillis = startedAtMillis,
+                confirmedPointCount = points.size.toLong(),
+                lastConfirmedPointSequence = points.size.toLong().takeIf { points.isNotEmpty() },
+                lastConfirmedPointTimestampMillis = points.lastOrNull()?.timestampMillis,
+            )
         }
         override fun updateActiveTrip(mode: TripMode, pausedAtMillis: Long?, totalPausedMillis: Long) = Unit
         override fun completeTrip(record: CompletedTripRecord) = Unit

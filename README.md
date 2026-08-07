@@ -21,6 +21,14 @@ mobile/
 
 手机版当前保留 `minSdk = 27`，独立升级到 `compileSdk/targetSdk = 36`、AGP `8.13.2`、Gradle `8.13` 和 Kotlin/Compose Compiler `2.3.21`。车机版仍按 Android 8.1 / API 27 独立维护，不与本项目同步升级。
 
+## 当前版本
+
+- 最新版本：[`v0.2.0`](https://github.com/lonnnnnng/cargps-mobile/releases/tag/v0.2.0)
+- Git 提交：`0995eb2`
+- 安装包：`CarGPS-Mobile-v0.2.0.apk`，版本 `0.2.0 (3)`
+- SHA-256：`8fc1238c1fdc45db0e49d3d78243abdfe834fe15e87008e53004ae3eea366bc2`
+- 当前开发线：`v0.2.0` 之后的 M1-M4 开发版本，尚未打 tag 或发布。
+
 ## 验证设备
 
 - AVD：`Pixel_9`
@@ -34,10 +42,16 @@ mobile/
 - 显示时间、经纬度、海拔、方向、定位精度、卫星数量和定位更新时间。
 - 支持开始、暂停、继续、结束行程，并统计里程、总时长、移动时长和停车时长。
 - 使用系统 `LocationManager`、GNSS 和 NMEA，不依赖 Google Play Services。
-- 使用本地 SQLite 保存活动行程、暂停状态、历史统计和轨迹点。
-- 使用 O(1) 增量行程累计器，长行程不在仪表 ViewModel 中保留完整轨迹列表。
+- 使用 Room 2.8.4 管理本地 SQLite schema v4，保存活动行程、暂停状态、历史统计和轨迹点。
+- 使用 O(1) 增量行程累计器，长行程不在仪表运行时中保留完整轨迹列表。
 - 定位、NMEA 与卫星回调在专用线程处理，NMEA 以 500ms 窗口聚合后更新界面。
 - 轨迹点按最多 16 点或 1 秒批量事务落库，并把存储异常反馈到仪表状态。
+- 行程协调器串行处理恢复、开始、暂停、继续、结束和定位点；开始、暂停、继续、结束等元数据命令只在存储确认后切换模式，轨迹点则先更新实时统计、批量落库后再推进确认检查点。
+- 活动行程由 `location` 类型前台服务持有定位引擎；Activity 只绑定同一运行时并观察状态，切到后台或锁屏后通过常驻通知继续记录。
+- 通知提供返回应用和“结束行程”操作，模式、每 10 米里程或最多每 5 秒刷新一次。
+- 每次轨迹批次成功落库后发布已确认检查点，记录行程开始时间、确认点数、最后 sequence 和时间；任务被移除时会尽力请求冲刷尾批次，但系统仍可能在异步请求完成前回收进程。
+- `START_STICKY` 新进程先显示恢复通知并等待 Room 结果，再恢复活动行程和定位，不能把 Runtime 初始空闲状态误判为没有行程。
+- Room 通过显式 `1 -> 2 -> 3 -> 4` 迁移接管旧数据库，不启用 destructive fallback；活动行程 mode 非法时进入存储损坏状态、保留原始数据并禁止开始新行程。
 - 提供无需滚动的单屏紧凑仪表、底部行程控制和常显定位遥测。
 - Release 启用 R8、资源压缩和 Baseline Profile。
 
@@ -47,6 +61,10 @@ mobile/
 - 共用缺陷修复需要按需移植并在各自设备上独立验证。
 - 本项目不包含车机 UI、车机产品规格或车机发布资产。
 - 本地签名文件没有从车机项目复制；Release 构建仍通过 `ANDROID_SIGNING_*` 环境变量注入签名。
+- M2 已在 `Pixel_9` / API 35 完成前台服务短路径验证，但 API 27/API 29、连续锁屏 30 分钟和真实道路长测仍是发布前风险门禁。
+- M3 已在 `Pixel_9` 通过应用进程 `SIGKILL` 恢复验证；恢复上限是最后确认检查点，最多约 1 秒的内存尾批仍不承诺零丢点，`force-stop` 也不会被描述为普通系统恢复。
+- M4 已完成数据库损坏与无活动行程的显式区分、Room schema v4 和旧 schema 无损迁移；仍需在 API 27/API 29 随整体验收复核。
+- 下一版发布前还必须补齐权限失败不误报“正在记录”、定位点与结束命令的确定顺序，并重新生成不含已删除类名的 Baseline Profile；跨 API 30 分钟回归、真实设备 2 小时长测和 AGP 9 继续分阶段推进。
 
 ## 文档与验证资料
 
@@ -55,15 +73,16 @@ mobile/
 - [产品规格](./docs/product-spec.md)
 - [Android 技术设计](./docs/technical-design.md)
 - [测试与性能基线](./docs/testing.md)
+- [剩余高风险迁移项](./docs/migration-risks.md)
 - [ADR-0001：采用系统 LocationManager](./docs/adr/0001-use-platform-locationmanager.md)
-- [当前 Pixel_9 升级验证截图](./artifacts/cargps-mobile-upgrade-pixel9.png)
-- [截图、UI 树与发布产物说明](./artifacts/README.md)
+- [截图、UI 树与发布产物说明](./artifacts/README.md)：`v0.2.0` Pixel_9 验证文件保存在本地 `artifacts/release-v0.2.0/`，默认不提交 Git。
 
 ## 常用验证命令
 
 ```zsh
 ./gradlew :gps-core:testDebugUnitTest
 ./gradlew :mobile-app:lintDebug :mobile-app:assembleDebug :mobile-app:assembleRelease
+adb -s emulator-5554 shell getprop ro.boot.qemu.avd_name
 ANDROID_SERIAL=emulator-5554 ./gradlew :gps-core:connectedDebugAndroidTest :mobile-app:connectedDebugAndroidTest
 ANDROID_SERIAL=emulator-5554 ./gradlew :mobile-app:generateReleaseBaselineProfile
 ```

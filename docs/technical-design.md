@@ -18,19 +18,23 @@
 
 ```mermaid
 flowchart LR
-    LM["LocationManager / GPS_PROVIDER"] --> LS["原始 Location 样本"]
+    AS["可见 Activity 用户操作"] --> FGS["TripRecordingService"]
+    FGS --> LM["LocationManager / GPS_PROVIDER"]
+    LM --> LS["原始 Location 样本"]
     NM["OnNmeaMessageListener"] --> BG["专用回调线程"]
     GS["GnssStatus.Callback"] --> BG
     BG --> NP["NMEA 校验与 500ms 聚合"]
     BG --> GH["卫星与定位健康"]
     LS --> QG["样本质量门"]
     QG --> SE["速度估算与平滑"]
-    QG --> TA["行程累计器"]
+    QG --> TS["TripSessionCoordinator"]
+    TS --> TA["行程累计器"]
+    TS --> DB["本地行程存储"]
+    TS --> RT["DashboardRuntime / StateFlow"]
     NP --> GH
-    SE --> VM["仪表状态"]
-    TA --> DB["本地行程存储"]
-    TA --> VM
-    GH --> VM
+    SE --> RT
+    GH --> RT
+    RT --> UI["Activity 只读界面"]
 ```
 
 关键原则：只有“有效定位样本”能驱动行程累计；NMEA 和卫星回调补充诊断信息，但不能绕过质量门直接修改里程。
@@ -59,11 +63,12 @@ flowchart LR
 ## 5. 工程与模块边界
 
 - `gps-core`：注册和注销系统位置、NMEA、GNSS 状态监听，并承载质量门、速度估算和行程统计；不包含手机界面。
-- `mobile-app`：包名 `com.cargps.mobile`，只负责竖屏手机界面、权限入口和 Activity 生命周期。
+- `mobile-app`：包名 `com.cargps.mobile`；`CarGpsApplication` 持有进程内单例 `DashboardRuntime`，`TripRecordingService` 唯一持有 `LocationEngine`，Activity 只负责竖屏界面、权限入口、服务绑定和用户命令。
 - `nmea-parser`：位于 `gps-core`，处理校验和、字段解析和语句容错，不维护行程状态。
 - `location-quality`：位于 `gps-core`，判断样本是否可显示、是否可累计、是否发生过期或断点。
 - `speed-estimator`：位于 `gps-core`，处理速度来源选择、单位转换、异常值过滤和平滑。
 - `trip-domain`：位于 `gps-core`，`TripAccumulator` 以 O(1) 单点更新处理距离、移动时间和最高速度，只保留最后一个点与累计值。
+- `trip-session`：`TripSessionCoordinator` 是进程内唯一行程会话所有者，串行处理领域命令；界面只观察“加载中、处理中、已确认、失败”状态。
 - `trip-storage`：活动行程快照、已结束行程与轨迹点的本地持久化。
 - `dashboard-ui`：手机界面只消费 `gps-core` 提供的只读仪表状态，不自行计算业务统计。
 
@@ -71,19 +76,25 @@ flowchart LR
 
 ## 6. 前后台策略
 
-- 只在界面可见时记录：普通前台定位即可，权限和系统负担最小。
-- 用户明确开始行程且允许切到其他应用继续记录：Android 8.0 起后台定位会被限频，应使用带常驻通知的前台服务保存连续行程。
-- API 27 不需要 `ACCESS_BACKGROUND_LOCATION`，该权限从 API 29 才出现；但仍需遵守前台服务和通知要求。
-- 首版可以把“仅前台记录”设为 MVP 边界，把前台服务作为第二个垂直切片，避免一开始混入服务恢复和通知生命周期。
+- `TripRecordingService` 是唯一定位会话所有者。界面可见且未开始行程时，Activity 绑定服务以获取定位；活动行程开始后，Service 在 Activity 不可见或锁屏时继续持有 `LocationEngine`。
+- 用户只能在可见 Activity 内明确开始行程并调用 `startForegroundService()`，符合 Android 12 / API 31 起的后台启动限制；当前不支持任意后台时刻新建定位服务。
+- Service 使用常驻低优先级通知，提供返回应用和结束行程的显式不可变 `PendingIntent`；通知按模式、每 10 米或最多每 5 秒刷新，避免每秒重建 SystemUI 视图。
+- Manifest 已声明 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_LOCATION` 和 `android:foregroundServiceType="location"`；Service 在升为前台前检查精确位置权限。
+- API 27 不需要 `ACCESS_BACKGROUND_LOCATION`，该权限从 API 29 才出现。当前 M2 不申请后台位置；只有未来确需从后台创建定位服务时才单独评审该权限和系统豁免。
+- M2 核心实现及 Pixel_9 / API 35 短路径已验证，但 API 27/API 29、连续锁屏 30 分钟和真实道路长测未完成，因此尚不能把跨版本后台记录标记为已正式交付。
+- 系统以 `START_STICKY` 重建 Service 时先升为“正在确认行程存储”前台状态，并等待 `DashboardRuntime.awaitInitialRestore()`；只有恢复完成且存在活动行程时才重启定位，没有活动行程或恢复失败后才停止 Service。
 
-## 7. 持久化建议
+## 7. 持久化实现
 
-- 当前使用 API 27 原生 `SQLiteOpenHelper`，由 `TripStorage` 隔离存储实现；领域与 UI 不依赖 SQLite 类型。
-- SQLite 写入统一进入单线程后台队列；恢复和历史查询由 ViewModel 在 `Dispatchers.IO` 执行，读取仍作为队列屏障观察此前写入。
-- 有效点按最多 16 点或 1 秒组成批次，在单个事务中写入；暂停、结束、读取和关闭前强制冲刷尾批次，允许的意外进程损失窗口不超过约 1 秒。
-- 活动行程元数据在开始、暂停和恢复时立即更新；历史列表使用结束时间索引，数据库 schema 当前为 v3。
+- 生产装配使用 Room 2.8.4 管理本地 SQLite，schema 当前为 v4；`TripStorage` 隔离数据库实现，领域与 UI 不依赖 Room 类型。`SqliteTripStorage` 只保留为旧 schema fixture 构造和兼容性验证工具。
+- Room 注册显式 `1 -> 2`、`2 -> 3`、`3 -> 4` 迁移并导出 v4 schema，不启用 destructive fallback。v4 规范化旧表以建立 Room schema identity，但不改变统计口径或历史数据。
+- 数据库写入统一进入单线程后台队列；`TripSessionCoordinator` 串行派发恢复、历史查询和元数据确认，阻塞式存储调用切到 `Dispatchers.IO`，定位点由存储队列在后台批量落库。读取屏障只观察它之前已经入队的写入。
+- 有效点按最多 16 点或 1 秒组成批次，在单个事务中写入；暂停、结束、读取、已执行的生命周期检查点和正常关闭前强制冲刷尾批次。`onTaskRemoved()` 只异步请求检查点，系统可能在请求完成前直接回收进程，异常退出仍存在最多约 1 秒的未确认点窗口。
+- `ActiveTripCheckpoint` 表达数据库确认边界：行程开始时间、确认点数、最后 `sequence` 和最后点时间。队列每次批量事务成功后发布该检查点，`TripSessionCoordinator` 将其映射到 `DashboardRuntime`；未冲刷点只能更新实时统计，不能进入确认边界。
+- 活动行程元数据在开始、暂停和恢复时排队写入；协调器等待写入屏障成功后才发布新模式。历史列表使用结束时间索引。
+- `ActiveTripLoadResult` 显式区分 `Empty`、`Loaded` 和 `Corrupt`。无法识别活动行程 mode 时保留原始行，协调器关闭存储门禁并拒绝开始新行程；迁移失败依赖事务回滚保留原数据库，禁止自动清库。
 - 结束行程在同一事务中先写入已结束统计并迁移活动轨迹点，再清除活动行程；中途失败时优先保留完整可恢复数据。
-- 进程重建时恢复行程模式、开始时间、暂停累计和轨迹点，并主动断开恢复前后的定位点，避免补算跨进程位移。
+- 进程重建时由协调器恢复行程模式、开始时间、暂停累计、已落库轨迹和最后确认检查点，并主动断开恢复前后的定位点，避免补算跨进程位移。
 - 原始 NMEA 默认不持久化；后续导出能力与轨迹历史继续使用独立存储边界。
 
 ## 8. 测试重点
@@ -91,9 +102,11 @@ flowchart LR
 - NMEA：合法校验和、错误校验和、缺字段、多星座 talker ID、未知语句、非数值字段。
 - 质量门：时间倒退、重复时间、低精度、超时恢复、跳点、静止漂移。
 - 统计：移动/停车边界、暂停、恢复、结束、进程重建和零时长除法。
-- 长行程：十万点增量统计不溢出，ViewModel 不持有完整轨迹；SQLite 千点批量写入后顺序与恢复一致。
+- 长行程：十万点增量统计不溢出，`DashboardRuntime` 不持有完整轨迹；Room 千点批量写入后顺序与恢复一致。
 - UI：无权限、无数据、缺海拔、弱定位、过期、超长坐标文本，以及 `Pixel_9` 竖屏安全区和单屏无滚动约束。
-- 性能：Baseline Profile 覆盖首屏；Macrobenchmark 在 Pixel_9 上记录无预编译冷启动 TTID，相对比较时保持同一 AVD 配置。
+- 服务：Manifest 私有性、`location` 类型、权限声明、显式 Intent 和不可变 `PendingIntent`；运行时覆盖 Home、锁屏、Activity 重建、通知结束与单定位线程。
+- 恢复：用应用自身 UID 向活动行程进程发送 `SIGKILL`，验证系统以 null Intent 重建 `START_STICKY` Service、等待存储、恢复前台通知和单定位线程；`force-stop` 单独建模，不算普通恢复。
+- 性能：Baseline Profile 覆盖首屏；Macrobenchmark 在 Pixel_9 上记录无预编译冷启动 TTID，相对比较时保持同一 AVD 配置。M2 重构后生成文件仍含已删除类名，必须重新生成后才能作为当前性能资产。
 - 设备：安装、UI 和功能验证显式指定 `Pixel_9`，不操作 Redmi 真机；任何安装命令都不能依赖 adb 默认设备。
 
 ## 9. 已验证的官方依据
@@ -102,5 +115,13 @@ flowchart LR
 - [`LocationManager`](https://developer.android.com/reference/android/location/LocationManager)：位置 API 权限、NMEA 监听和 GNSS 状态回调定义。
 - [`Location`](https://developer.android.com/reference/android/location/Location)：位置对象包含坐标、时间、精度，以及可选的方向、海拔和速度。
 - [后台定位](https://developer.android.com/develop/sensors-and-location/location/background)：Android 8.0 及以上后台应用的位置更新会被限制为每小时少量次数。
+- [Android 14 前台服务类型](https://developer.android.com/about/versions/14/changes/fgs-types-required)：定位服务需声明 `location` 类型和 `FOREGROUND_SERVICE_LOCATION`，并在启动前满足位置权限条件。
+- [启动前台服务](https://developer.android.com/develop/background-work/services/fgs/launch)：Android 12 起限制后台启动；Android 14 起会核验服务类型对应权限。
 
-以上为 2026-08-05 抓取 Android Developers 页面后确认的结论。不同手机 GNSS 驱动是否实际输出全部 NMEA 语句，仍需在目标设备上验证。
+定位 API 依据于 2026-08-05 核验，前台服务规则于 2026-08-07 重新抓取 Android Developers 正文确认。不同手机 GNSS 驱动是否实际输出全部 NMEA 语句，仍需在目标设备上验证。
+
+## 10. 后续迁移边界
+
+剩余工作不能按“权限补丁”或“升版本”孤立推进。前台服务已经改变定位会话所有权，Room 已经改变写入确认和进程恢复语义，后续权限状态机与事件串行化仍会影响服务能否启动及尾点能否可靠落库。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
+
+M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，M4 已完成 Room schema v4、旧版本显式迁移和损坏状态护栏。下一版发布前先补 M5 权限失败最小闭环、M6 单一事件队列与跨 API 长测，并刷新 M7 Baseline Profile；真实设备 2 小时长测和 M8 AGP 9 分阶段推进。

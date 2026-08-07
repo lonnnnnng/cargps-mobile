@@ -26,13 +26,18 @@ class QueuedTripStorage(
     }
     private val pendingPoints = mutableListOf<TripPoint>()
     private var pointFlushScheduled = false
+    private var lastWriteFailure: Throwable? = null
     private val mutableErrors = MutableSharedFlow<Throwable>(extraBufferCapacity = 8)
+    private val mutableConfirmedCheckpoints = MutableSharedFlow<ActiveTripCheckpoint>(extraBufferCapacity = 8)
 
     override val errors = mutableErrors.asSharedFlow()
+    override val confirmedCheckpoints = mutableConfirmedCheckpoints.asSharedFlow()
 
-    override fun loadActiveTrip(): ActiveTripRecord? = query(delegate::loadActiveTrip)
+    override fun loadActiveTrip(): ActiveTripLoadResult = query(delegate::loadActiveTrip)
 
-    override fun startTrip(startedAtMillis: Long) = enqueue(flushPointsFirst = true) {
+    override fun loadActiveTripCheckpoint(): ActiveTripCheckpoint? = query(delegate::loadActiveTripCheckpoint)
+
+    override fun startTrip(startedAtMillis: Long) = enqueue(flushPointsFirst = true, confirmsWrite = true) {
         delegate.startTrip(startedAtMillis)
     }
 
@@ -49,11 +54,11 @@ class QueuedTripStorage(
         mode: TripMode,
         pausedAtMillis: Long?,
         totalPausedMillis: Long,
-    ) = enqueue(flushPointsFirst = true) {
+    ) = enqueue(flushPointsFirst = true, confirmsWrite = true) {
         delegate.updateActiveTrip(mode, pausedAtMillis, totalPausedMillis)
     }
 
-    override fun completeTrip(record: CompletedTripRecord) = enqueue(flushPointsFirst = true) {
+    override fun completeTrip(record: CompletedTripRecord) = enqueue(flushPointsFirst = true, confirmsWrite = true) {
         delegate.completeTrip(record)
     }
 
@@ -63,6 +68,11 @@ class QueuedTripStorage(
 
     override fun completedTripPoints(tripId: Long): List<TripPoint> = query {
         delegate.completedTripPoints(tripId)
+    }
+
+    override fun awaitPendingWrites() {
+        val failure = query { lastWriteFailure }
+        if (failure != null) throw failure
     }
 
     override fun close() {
@@ -77,14 +87,20 @@ class QueuedTripStorage(
         runCatching { closeFuture.get() }.onFailure(::reportWriteFailure)
     }
 
-    private fun enqueue(flushPointsFirst: Boolean = false, block: () -> Unit) {
+    private fun enqueue(
+        flushPointsFirst: Boolean = false,
+        confirmsWrite: Boolean = false,
+        block: () -> Unit,
+    ) {
         if (closed.get()) return
         runCatching {
             executor.execute {
                 runCatching {
                     if (flushPointsFirst) flushPendingPointsWithRetry()
                     block()
+                    if (confirmsWrite) lastWriteFailure = null
                 }.onFailure { error ->
+                    lastWriteFailure = error
                     reportWriteFailure(error)
                     if (pendingPoints.isNotEmpty()) schedulePointFlush()
                 }
@@ -96,7 +112,11 @@ class QueuedTripStorage(
         check(!closed.get()) { "行程存储已关闭" }
         return try {
             executor.submit<T> {
-                flushPendingPointsWithRetry()
+                runCatching(::flushPendingPointsWithRetry).onFailure { error ->
+                    // 作者：long｜查询屏障代表调用方正在等待持久化确认，最终重试失败必须进入统一错误通道，不能只向同步调用方抛出。
+                    lastWriteFailure = error
+                    reportWriteFailure(error)
+                }.getOrThrow()
                 block()
             }.get()
         } catch (error: ExecutionException) {
@@ -115,6 +135,14 @@ class QueuedTripStorage(
         delegate.appendPoints(batch)
         // 作者：long｜SQLite 批量事务成功后才移除内存点；磁盘异常时保留原批次，后续定时冲刷或查询屏障可以重试。
         pendingPoints.subList(0, batch.size).clear()
+        lastWriteFailure = null
+        publishConfirmedCheckpoint()
+    }
+
+    private fun publishConfirmedCheckpoint() {
+        runCatching(delegate::loadActiveTripCheckpoint)
+            .onSuccess { checkpoint -> checkpoint?.let(mutableConfirmedCheckpoints::tryEmit) }
+            .onFailure(::reportWriteFailure)
     }
 
     private fun flushPendingPointsWithRetry() {
@@ -122,9 +150,11 @@ class QueuedTripStorage(
             flushPendingPoints()
         } catch (firstFailure: Throwable) {
             // 作者：long｜关键状态切换必须先保证此前轨迹落库；短暂 I/O 抖动时在后台线程重试一次并保持调用顺序。
-            reportWriteFailure(firstFailure)
             TimeUnit.MILLISECONDS.sleep(POINT_FLUSH_RETRY_DELAY_MILLIS)
-            flushPendingPoints()
+            runCatching(::flushPendingPoints).getOrElse { finalFailure ->
+                finalFailure.addSuppressed(firstFailure)
+                throw finalFailure
+            }
         }
     }
 
@@ -135,7 +165,8 @@ class QueuedTripStorage(
             executor.schedule(
                 {
                     pointFlushScheduled = false
-                    runCatching(::flushPendingPoints).onFailure { error ->
+                    runCatching(::flushPendingPointsWithRetry).onFailure { error ->
+                        lastWriteFailure = error
                         reportWriteFailure(error)
                         if (pendingPoints.isNotEmpty()) schedulePointFlush()
                     }

@@ -37,3 +37,12 @@
 
 - `CarGPS-Mobile-v0.2.0.apk`：正式签名手机版 APK。
 - `SHA256SUMS`：发布 APK 的 SHA-256 校验文件。
+- 公开 Release：https://github.com/lonnnnnng/cargps-mobile/releases/tag/v0.2.0
+- APK SHA-256：`8fc1238c1fdc45db0e49d3d78243abdfe834fe15e87008e53004ae3eea366bc2`。
+- 远端资产已重新下载并通过版本、v2 签名、证书、16KB 对齐和摘要复核。
+
+后续不在本版本内补做的运行时迁移及验收标准见 [剩余高风险迁移项](./migration-risks.md)。
+
+## 发布后开发状态
+
+以上“已知边界”描述的是 `v0.2.0` 正式包，不代表当前未发布工作树。`v0.2.0` 之后已经完成 M1 行程确认状态机、M2 定位前台服务、M3 最后确认检查点与进程恢复，以及 M4 Room 2.8.4 / schema v4 无损迁移和数据损坏护栏；这些改动尚未发布，最新状态以 [剩余高风险迁移项](./migration-risks.md) 为准。

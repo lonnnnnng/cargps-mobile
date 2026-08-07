@@ -60,7 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cargps.DashboardState
-import com.cargps.DashboardViewModel
+import com.cargps.DashboardRuntime
 import com.cargps.FixStatus
 import com.cargps.TripMode
 import com.cargps.storage.CompletedTripRecord
@@ -150,7 +150,7 @@ private fun MobileHeader(state: DashboardState, onToggleTheme: () -> Unit) {
         )
         Spacer(Modifier.weight(1f))
         Text(
-            text = "${DashboardViewModel.formatDate(state.nowMillis)} ${DashboardViewModel.formatTime(state.nowMillis)}",
+            text = "${DashboardRuntime.formatDate(state.nowMillis)} ${DashboardRuntime.formatTime(state.nowMillis)}",
             fontSize = 13.sp,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
@@ -292,7 +292,7 @@ private fun SpeedTripPanel(state: DashboardState, modifier: Modifier = Modifier)
                         }
                     }
                     Text(
-                        DashboardViewModel.formatDuration(stats.elapsedMillis),
+                        DashboardRuntime.formatDuration(stats.elapsedMillis),
                         fontSize = 17.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
@@ -325,7 +325,7 @@ private fun SpeedTripPanel(state: DashboardState, modifier: Modifier = Modifier)
 private fun TripTimeValue(label: String, millis: Long) {
     Column {
         Text(label, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.48f))
-        Text(DashboardViewModel.formatDuration(millis), fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
+        Text(DashboardRuntime.formatDuration(millis), fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -371,7 +371,7 @@ private fun RecentTripRow(trip: CompletedTripRecord) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "${DashboardViewModel.formatDate(trip.startedAtMillis)} ${DashboardViewModel.formatTime(trip.startedAtMillis).take(5)}",
+            "${DashboardRuntime.formatDate(trip.startedAtMillis)} ${DashboardRuntime.formatTime(trip.startedAtMillis).take(5)}",
             modifier = Modifier.weight(1f),
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
@@ -379,7 +379,7 @@ private fun RecentTripRow(trip: CompletedTripRecord) {
             maxLines = 1,
         )
         Text(
-            DashboardViewModel.formatDuration(trip.stats.elapsedMillis),
+            DashboardRuntime.formatDuration(trip.stats.elapsedMillis),
             modifier = Modifier.width(68.dp),
             textAlign = TextAlign.End,
             fontSize = 11.sp,
@@ -410,11 +410,11 @@ private fun StatsStrip(state: DashboardState) {
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.52f)),
     ) {
         Row(Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 10.dp)) {
-            MetricCell("行程平均", DashboardViewModel.formatSpeed(stats.tripAverageMps), "km/h", Modifier.weight(1f))
+            MetricCell("行程平均", DashboardRuntime.formatSpeed(stats.tripAverageMps), "km/h", Modifier.weight(1f))
             MetricDivider()
-            MetricCell("移动平均", DashboardViewModel.formatSpeed(stats.movingAverageMps), "km/h", Modifier.weight(1f))
+            MetricCell("移动平均", DashboardRuntime.formatSpeed(stats.movingAverageMps), "km/h", Modifier.weight(1f))
             MetricDivider()
-            MetricCell("最高速度", DashboardViewModel.formatSpeed(stats.maxSpeedMps), "km/h", Modifier.weight(1f))
+            MetricCell("最高速度", DashboardRuntime.formatSpeed(stats.maxSpeedMps), "km/h", Modifier.weight(1f))
             MetricDivider()
             MetricCell("海拔", state.altitudeMeters?.let { it.toInt().toString() } ?: "--", "m", Modifier.weight(1f))
         }
@@ -515,7 +515,7 @@ private fun MobileControlBar(
             } else {
                 Button(
                     onClick = onToggleTrip,
-                    enabled = state.storageReady,
+                    enabled = state.storageReady && !state.tripCommandInProgress,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 ) {
                     Icon(
@@ -525,9 +525,9 @@ private fun MobileControlBar(
                     Spacer(Modifier.width(7.dp))
                     Text(
                         when (state.tripMode) {
-                            TripMode.IDLE -> "开始行程"
-                            TripMode.RECORDING -> "暂停行程"
-                            TripMode.PAUSED -> "继续行程"
+                            TripMode.IDLE -> if (state.tripCommandInProgress) "处理中" else "开始行程"
+                            TripMode.RECORDING -> if (state.tripCommandInProgress) "处理中" else "暂停行程"
+                            TripMode.PAUSED -> if (state.tripCommandInProgress) "处理中" else "继续行程"
                         },
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
@@ -536,7 +536,7 @@ private fun MobileControlBar(
                 if (state.tripMode != TripMode.IDLE) {
                     FilledTonalButton(
                         onClick = onRequestEnd,
-                        enabled = state.storageReady,
+                        enabled = state.storageReady && !state.tripCommandInProgress,
                         modifier = Modifier.width(112.dp).fillMaxHeight(),
                         contentPadding = PaddingValues(horizontal = 10.dp),
                         colors = ButtonDefaults.filledTonalButtonColors(
@@ -580,7 +580,7 @@ private fun tripStatusColor(mode: TripMode): Color = when (mode) {
     TripMode.PAUSED -> WarningAmber
 }
 
-private fun locationHealthDetail(state: DashboardState): String = state.storageError?.let { error ->
+private fun locationHealthDetail(state: DashboardState): String = state.foregroundServiceError ?: state.storageError?.let { error ->
     "行程存储异常：$error"
 } ?: when (state.fixStatus) {
     FixStatus.PERMISSION_REQUIRED -> "允许精确定位后才能读取车速与行程"

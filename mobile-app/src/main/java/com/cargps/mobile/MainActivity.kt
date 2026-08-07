@@ -1,70 +1,94 @@
 package com.cargps.mobile
 
 import android.Manifest
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.location.Location
+import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
-import com.cargps.DashboardViewModel
-import com.cargps.DashboardViewModelFactory
-import com.cargps.LocationEngine
-import com.cargps.domain.NmeaFrame
+import com.cargps.DashboardState
+import com.cargps.TripMode
 import com.cargps.mobile.ui.MobileDashboardScreen
 import com.cargps.mobile.ui.MobileGpsTheme
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity(), LocationEngine.Listener {
-    private val viewModel: DashboardViewModel by viewModels {
-        DashboardViewModelFactory(applicationContext)
+class MainActivity : ComponentActivity() {
+    private val dashboardState = MutableStateFlow(DashboardState())
+    private var serviceBinder: TripRecordingService.LocalBinder? = null
+    private var serviceStateJob: Job? = null
+    private var serviceBound = false
+    private var activityStarted = false
+    private var startTripAfterPermission = false
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, service: IBinder) {
+            val binder = service as TripRecordingService.LocalBinder
+            serviceBinder = binder
+            serviceBound = true
+            dashboardState.value = binder.state.value
+            if (activityStarted) binder.setClientVisible(true)
+            serviceStateJob?.cancel()
+            serviceStateJob = lifecycleScope.launch {
+                binder.state.collect { state -> dashboardState.value = state }
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            serviceStateJob?.cancel()
+            serviceStateJob = null
+            serviceBinder = null
+            serviceBound = false
+        }
     }
-    private lateinit var locationEngine: LocationEngine
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { result ->
-        if (result[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
-            locationEngine.start()
+    ) {
+        val fineLocationGranted = hasFineLocationPermission()
+        val notificationGranted = hasNotificationPermission()
+        if (fineLocationGranted) {
+            serviceBinder?.refreshLocationAccess()
         } else {
-            viewModel.onPermissionRequired()
+            serviceBinder?.onPermissionRequired()
+        }
+        serviceBinder?.onForegroundServiceError(
+            if (notificationGranted) null else "允许通知后才能显示后台行程状态",
+        )
+        if (startTripAfterPermission && fineLocationGranted && notificationGranted) {
+            startTripAfterPermission = false
+            startTripFromVisibleActivity()
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        locationEngine = LocationEngine(this, this)
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                while (true) {
-                    viewModel.onTick(System.currentTimeMillis())
-                    delay(1_000L)
-                }
-            }
-        }
         setContent {
-            val state = viewModel.state.collectAsStateWithLifecycle().value
+            val state = dashboardState.collectAsStateWithLifecycle().value
             MobileGpsTheme(darkTheme = state.darkTheme) {
                 MobileDashboardScreen(
                     state = state,
-                    onRequestPermission = {
-                        permissionLauncher.launch(
-                            arrayOf(
-                                Manifest.permission.ACCESS_COARSE_LOCATION,
-                                Manifest.permission.ACCESS_FINE_LOCATION,
-                            ),
-                        )
+                    onRequestPermission = { requestRequiredPermissions(startAfterGrant = true) },
+                    onToggleTrip = {
+                        if (state.tripMode == TripMode.IDLE) {
+                            startTripFromVisibleActivity()
+                        } else {
+                            serviceBinder?.toggleTrip(System.currentTimeMillis())
+                        }
                     },
-                    onToggleTrip = { viewModel.toggleTrip(System.currentTimeMillis()) },
-                    onEndTrip = { viewModel.endTrip(System.currentTimeMillis()) },
-                    onToggleTheme = viewModel::toggleTheme,
+                    onEndTrip = { serviceBinder?.endTrip(System.currentTimeMillis()) },
+                    onToggleTheme = { serviceBinder?.toggleTheme() },
                 )
             }
         }
@@ -72,32 +96,69 @@ class MainActivity : ComponentActivity(), LocationEngine.Listener {
 
     override fun onStart() {
         super.onStart()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            locationEngine.start()
+        activityStarted = true
+        if (!serviceBound) {
+            val bound = bindService(
+                TripRecordingService.bindIntent(this),
+                serviceConnection,
+                Context.BIND_AUTO_CREATE,
+            )
+            if (!bound) dashboardState.value = dashboardState.value.copy(
+                foregroundServiceError = "定位服务连接失败",
+            )
         } else {
-            // 作者：long｜首次进入先呈现权限说明，由用户主动授权后再启用连续卫星监听。
-            viewModel.onPermissionRequired()
+            serviceBinder?.setClientVisible(true)
         }
     }
 
     override fun onStop() {
-        locationEngine.stop()
+        activityStarted = false
+        serviceBinder?.setClientVisible(false)
+        serviceStateJob?.cancel()
+        serviceStateJob = null
+        if (serviceBound) {
+            unbindService(serviceConnection)
+            serviceBound = false
+            serviceBinder = null
+        }
         super.onStop()
     }
 
-    override fun onDestroy() {
-        locationEngine.close()
-        super.onDestroy()
+    private fun startTripFromVisibleActivity() {
+        if (!hasFineLocationPermission() || !hasNotificationPermission()) {
+            requestRequiredPermissions(startAfterGrant = true)
+            return
+        }
+        startTripAfterPermission = false
+        serviceBinder?.onForegroundServiceError(null)
+        // 作者：long｜Android 12+ 只允许在可见 Activity 的明确用户操作中启动定位前台服务，禁止从后台恢复路径偷启。
+        ContextCompat.startForegroundService(this, TripRecordingService.startTripIntent(this))
     }
 
-    override fun onPermissionRequired() = viewModel.onPermissionRequired()
-    override fun onProviderDisabled() = viewModel.onProviderDisabled()
-    override fun onSearching() = viewModel.onSearching()
-    override fun onLocation(location: Location) = viewModel.onLocation(location)
-    override fun onSatellitesChanged(inView: Int, usedInFix: Int) =
-        viewModel.onSatellitesChanged(inView, usedInFix)
+    private fun requestRequiredPermissions(startAfterGrant: Boolean) {
+        startTripAfterPermission = startAfterGrant
+        val permissions = buildList {
+            if (!hasFineLocationPermission()) {
+                add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                add(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+            if (!hasNotificationPermission() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        if (permissions.isEmpty()) {
+            if (startAfterGrant) startTripFromVisibleActivity()
+        } else {
+            permissionLauncher.launch(permissions.toTypedArray())
+        }
+    }
 
-    override fun onNmea(frame: NmeaFrame) = viewModel.onNmea(frame)
+    private fun hasFineLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun hasNotificationPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
 }
