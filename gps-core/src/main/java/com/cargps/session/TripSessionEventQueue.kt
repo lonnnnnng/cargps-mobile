@@ -44,8 +44,14 @@ internal class TripSessionEventQueue(
 
     suspend fun dispatchAndAwait(command: TripSessionCommand): TripSessionResult {
         val completion = CompletableDeferred<TripSessionResult>()
-        events.send(QueuedEvent.Command(command, completion))
-        return completion.await()
+        return try {
+            events.send(QueuedEvent.Command(command, completion))
+            completion.await()
+        } catch (error: CancellationException) {
+            // 作者：long｜Service/Activity 销毁时取消等待不能让尚未消费的命令在恢复后继续产生行程副作用。
+            completion.cancel(error)
+            throw error
+        }
     }
 
     override fun close() {
@@ -56,6 +62,10 @@ internal class TripSessionEventQueue(
 
     private suspend fun process(event: QueuedEvent) {
         try {
+            if (event.completion?.isActive == false) {
+                // 作者：long｜等待者已经取消时直接丢弃尚未开始的命令；已经进入 dispatch 的事务仍由其协程取消语义负责。
+                return
+            }
             val command = when (event) {
                 is QueuedEvent.Command -> event.command
                 is QueuedEvent.Toggle -> when (currentMode()) {

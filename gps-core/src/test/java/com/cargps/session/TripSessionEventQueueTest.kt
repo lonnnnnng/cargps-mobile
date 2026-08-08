@@ -10,6 +10,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -110,6 +111,34 @@ class TripSessionEventQueueTest {
         }
         assertTrue(failure is CancellationException)
         assertFalse(failure is TimeoutCancellationException)
+    }
+
+    @Test
+    fun `恢复阻塞期间取消等待型开始不会在恢复后执行写入`() = runTest {
+        val releaseRestore = CompletableDeferred<Unit>()
+        val commands = mutableListOf<TripSessionCommand>()
+        val queue = TripSessionEventQueue(
+            scope = backgroundScope,
+            currentMode = { TripMode.IDLE },
+            dispatch = { command ->
+                commands += command
+                if (command is TripSessionCommand.Restore) releaseRestore.await()
+                TripSessionResult.Confirmed(TripSessionState(storageReady = true))
+            },
+            onResult = {},
+        )
+        runCurrent()
+
+        val start = async { queue.dispatchAndAwait(TripSessionCommand.Start(1_000L)) }
+        runCurrent()
+        start.cancelAndJoin()
+        assertTrue(start.isCancelled)
+
+        releaseRestore.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(listOf(TripSessionCommand.Restore), commands)
+        queue.close()
     }
 
     @Test

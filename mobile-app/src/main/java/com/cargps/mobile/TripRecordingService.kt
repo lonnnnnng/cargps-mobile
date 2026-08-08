@@ -58,8 +58,11 @@ class TripRecordingService : Service(), LocationEngine.Listener {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val binder = LocalBinder()
     private lateinit var runtime: DashboardRuntime
-    private lateinit var locationEngine: LocationEngine
     private lateinit var locationSessionController: LocationEngineSessionController
+    private lateinit var startLocation: () -> Boolean
+    private lateinit var stopLocation: () -> Unit
+    private lateinit var closeLocation: () -> Unit
+    private lateinit var readAccessState: () -> TripAccessState
     private lateinit var notificationManager: NotificationManager
     private var stateJob: Job? = null
     private var tickerJob: Job? = null
@@ -72,14 +75,19 @@ class TripRecordingService : Service(), LocationEngine.Listener {
     private var lastNotificationUpdateAtMillis = 0L
     private var lastNotificationMode: TripMode? = null
     private var lastNotificationDistanceBucket = -1L
+    private var lastNotificationStorageBlocked: Boolean? = null
 
     override fun onCreate() {
         super.onCreate()
-        runtime = (application as CarGpsApplication).dashboardRuntime()
-        locationEngine = LocationEngine(this, this)
+        val dependencies = dependenciesFactoryForTests?.invoke(this) ?: createProductionDependencies()
+        runtime = dependencies.runtime
+        startLocation = dependencies.startLocation
+        stopLocation = dependencies.stopLocation
+        closeLocation = dependencies.closeLocation
+        readAccessState = dependencies.readAccessState
         locationSessionController = LocationEngineSessionController(
-            startLocation = locationEngine::start,
-            stopLocation = locationEngine::stop,
+            startLocation = { startLocation() },
+            stopLocation = { stopLocation() },
         )
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
@@ -130,7 +138,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         tickerJob?.cancel()
         recoveryJob?.cancel()
         locationSessionController.reset()
-        locationEngine.close()
+        closeLocation()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -271,6 +279,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             foreground = false
             lastNotificationMode = null
             lastNotificationDistanceBucket = -1L
+            lastNotificationStorageBlocked = null
         }
 
         reconcileLocationEngine(state, access)
@@ -314,8 +323,10 @@ class TripRecordingService : Service(), LocationEngine.Listener {
     private fun updateNotificationIfNeeded(state: DashboardState) {
         val nowMillis = SystemClock.elapsedRealtime()
         val distanceBucket = (state.tripStats.distanceMeters / NOTIFICATION_DISTANCE_STEP_METERS).toLong()
+        val storageBlocked = isStorageInputBlocked(state)
         val stateChanged = state.tripMode != lastNotificationMode ||
-            distanceBucket != lastNotificationDistanceBucket
+            distanceBucket != lastNotificationDistanceBucket ||
+            storageBlocked != lastNotificationStorageBlocked
         if (!stateChanged && nowMillis - lastNotificationUpdateAtMillis < NOTIFICATION_UPDATE_INTERVAL_MILLIS) return
 
         notificationManager.notify(NOTIFICATION_ID, buildNotification(state))
@@ -326,11 +337,12 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         state: DashboardState,
         nowMillis: Long = SystemClock.elapsedRealtime(),
     ) {
-        // 作者：long｜通知只在模式、每 10 米里程或 5 秒时间窗口变化时刷新，避免每秒重建 SystemUI 视图和 PendingIntent。
+        // 作者：long｜存储阻断和恢复必须立即通知用户；其他稳定状态仍按模式、每 10 米或 5 秒窗口节流，避免每秒重建 SystemUI。
         lastNotificationUpdateAtMillis = nowMillis
         lastNotificationMode = state.tripMode
         lastNotificationDistanceBucket =
             (state.tripStats.distanceMeters / NOTIFICATION_DISTANCE_STEP_METERS).toLong()
+        lastNotificationStorageBlocked = isStorageInputBlocked(state)
     }
 
     private fun buildNotification(state: DashboardState): Notification {
@@ -368,7 +380,19 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         notificationManager.createNotificationChannel(channel)
     }
 
-    private fun currentTripAccessState(): TripAccessState = evaluateTripAccess(readTripAccessSnapshot())
+    private fun currentTripAccessState(): TripAccessState = readAccessState()
+
+    private fun createProductionDependencies(): TripRecordingServiceDependencies {
+        val runtime = (application as CarGpsApplication).dashboardRuntime()
+        val engine = LocationEngine(this, this)
+        return TripRecordingServiceDependencies(
+            runtime = runtime,
+            startLocation = engine::start,
+            stopLocation = engine::stop,
+            closeLocation = engine::close,
+            readAccessState = { evaluateTripAccess(readTripAccessSnapshot()) },
+        )
+    }
 
     private fun reportBlockedAccess(access: TripAccessState) {
         if (access.blocksLocation) runtime.onPermissionRequired()
@@ -413,6 +437,14 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         private const val TICK_INTERVAL_MILLIS = 1_000L
         private const val NOTIFICATION_UPDATE_INTERVAL_MILLIS = 5_000L
         private const val NOTIFICATION_DISTANCE_STEP_METERS = 10.0
+
+        /**
+         * 作者：long｜设备级 Service 测试只替换运行时和定位注册边界，不能让生产代码默认
+         * 依赖 fake；每个测试完成后都必须恢复为 null，避免跨测试泄漏。
+         */
+        @Volatile
+        internal var dependenciesFactoryForTests:
+            ((TripRecordingService) -> TripRecordingServiceDependencies)? = null
 
         fun bindIntent(context: Context): Intent = Intent(context, TripRecordingService::class.java)
 
