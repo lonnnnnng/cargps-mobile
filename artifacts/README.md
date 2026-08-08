@@ -19,7 +19,10 @@
 - `cargps-mobile-api29-v020-before.db`、`cargps-mobile-api29-upgraded-after.db`：API 29 Debug 同签名覆盖升级前后的数据库，29 点、33.50 米保持不变。
 - `cargps-mobile-api27-release-v020-before.db`、`cargps-mobile-api27-release-upgraded-after.db`：API 27 公开正式 `v0.2.0` 覆盖当前同证书 Release 前后的数据库，29 点、37.62 米保持不变。
 - `cargps-mobile-api29-release-v020-before.db`、`cargps-mobile-api29-release-upgraded-after.db`：API 29 公开正式 `v0.2.0` 覆盖当前同证书 Release 前后的数据库，30 点、28.74 米保持不变。
+- `cargps-mobile-api27-location-*.xml`：API 27 首次拒绝、勾选“不再询问”后的永久拒绝、应用设置授权、系统定位关闭与恢复证据。
+- `cargps-mobile-api29-location-*.xml`：API 29 首次拒绝、`Deny & don’t ask again`、`USER_FIXED`、应用设置授权、系统定位关闭与恢复证据。
 - `cargps-mobile-api31-*.xml`：API 31 初始未授权、真实 Approximate/Precise 升级、首次/永久拒绝、应用设置返回、系统定位开关、前台记录、锁屏返回、活动行程撤权及受阻结束证据。
+- `cargps-mobile-api33-location-*.xml`：API 33 Approximate/Precise 升级、首次/永久拒绝、应用设置授权、系统定位关闭与恢复证据；通知拒绝证据沿用既有 API 33 产物。
 - `release-v0.2.0/CarGPS-Mobile-v0.2.0.apk`：`0.2.0 (3)` 正式签名 APK，SHA-256 为 `8fc1238c1fdc45db0e49d3d78243abdfe834fe15e87008e53004ae3eea366bc2`。
 - `release-v0.2.0/Pixel_9-v0.2.0.png`、`Pixel_9-v0.2.0.xml`：正式包安装后的 Pixel_9 画面和 UI 树，滚动节点数量为 0。
 

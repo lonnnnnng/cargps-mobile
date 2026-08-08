@@ -10,12 +10,16 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.UiDevice
 import com.cargps.DashboardState
 import com.cargps.FixStatus
 import com.cargps.TripMode
 import com.cargps.mobile.ui.MobileDashboardScreen
 import com.cargps.mobile.ui.MobileGpsTheme
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -26,6 +30,23 @@ class TripAccessInstrumentedTest {
     val composeRule = createComposeRule()
 
     private val context = ApplicationProvider.getApplicationContext<CarGpsApplication>()
+    private val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+
+    @Before
+    fun forcePortraitTestWindow() {
+        // 作者：long｜通用 Compose 测试宿主不读取 MainActivity 的竖屏声明，必须固定为竖屏，避免 API 27 横屏 AVD 把手机版底部权限入口误判为不可见。
+        device.setOrientationNatural()
+        device.waitForIdle()
+        if (device.displayWidth > device.displayHeight) {
+            device.setOrientationLeft()
+            device.waitForIdle()
+        }
+    }
+
+    @After
+    fun restoreDeviceRotation() {
+        device.unfreezeRotation()
+    }
 
     @Test
     fun settingsIntentsTargetCurrentApplicationAndSystemLocation() {
