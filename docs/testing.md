@@ -2,7 +2,7 @@
 
 作者：long
 
-更新日期：2026-08-08 08:03:41（北京时间，UTC+8）
+更新日期：2026-08-08 08:47:44（北京时间，UTC+8）
 
 ## 测试分层
 
@@ -88,7 +88,9 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 运行时确认 `TripRecordingService` 为前台服务，类型掩码 `0x00000008`（`location`）；常驻通知显示记录状态并包含“结束行程”。
 - Home、锁屏、Activity 重建和重复打开的短路径中服务保持运行，应用进程内 `cargps-location` 定位线程始终为 1；覆盖安装触发进程重建后，已落库活动行程恢复并重新进入定位前台状态。
 - 从通知结束行程后，界面回到空闲状态，前台标志与活动通知清除，crash buffer 为空。
-- 30 分钟后台监测在第 5 个一分钟样本后被外部 `force-stop` 中断。`ApplicationExitInfo` 为 `USER REQUESTED / FORCE STOP`，不是崩溃、ANR 或系统回收；该次结果无效，完整 30 分钟关卡仍未通过。
+- 2026-08-07 的旧监测在第 5 个一分钟样本后被外部 `force-stop` 中断。`ApplicationExitInfo` 为 `USER REQUESTED / FORCE STOP`，不是崩溃、ANR 或系统回收；该次结果保持无效，不计入后续成功长测。
+- 2026-08-08 Pixel_9 / API 35 重新完成 41 个样本、1831 秒回归：样本 `0..13` 为 Home，`14..26` 为系统设置前台，`27..33` 为锁屏 `Dozing/Asleep`，`34..40` 为解锁后 Home。PID 始终为 `4395`，前台服务和通知持续，`cargps-location` 线程始终为 1，crash buffer 始终为 0。
+- 长测后回到应用仍显示“记录中”；正常结束后历史从 0 段增加为 1 段。Home 后 Service、活动通知和定位线程均为 0，GPS provider 为 `OFF`、`mStarted=false`，事件历史包含应用 `-registration`。摘要见 `artifacts/cargps-mobile-api35-30min-summary.md`。
 - 对应截图和 UI 树见 `artifacts/cargps-mobile-m2-*`；这些本地验证文件默认不提交 Git。
 
 ## M3 进程异常退出恢复回归
@@ -129,7 +131,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 本地完整关卡通过：`gps-core` 44/44、手机版 24/24 JVM；AndroidTest 编译、`lintDebug`、`lintVitalRelease`、Debug/Release、R8、资源压缩和 `baselineprofile:assembleBenchmarkRelease` 均成功。
 - Pixel_9 / API 35 instrumentation：`gps-core` 12/12、手机版 6/6。设备由 `emulator-5554` 的 `ro.boot.qemu.avd_name = Pixel_9` 明确确认。
 - Pixel_9 运行时短路径：开始后 UI 为“记录中”，Service 为 `location` 前台类型；以应用 UID 连续两次 ensure 后 `cargps-location` 线程仍为 1；结束后回到“等待开始”且历史增加一段，Home 后 Service 清除，crash buffer 无 CarGPS 记录。
-- API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；完整 30 分钟 Home/切换应用/锁屏、设备重启/低存储和真实设备 2 小时长测仍未完成，短路径不能替代这些门槛。
+- API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；Pixel_9 / API 35 的完整 30 分钟 Home/切换应用/锁屏已通过。API 27/API 29 的同类 30 分钟、设备重启/低存储和真实设备 2 小时长测仍未完成，短路径和 API 35 结果都不能替代这些门槛。
 - API 31 已完成可见开始、`location` 前台服务、Home、锁屏、单定位线程、活动行程撤权阻断和结束后 Home 清理短路径；它仍不计作 30 分钟长测。
 
 ## M7 Baseline Profile 与冷启动对照
@@ -174,4 +176,4 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 对齐与优化：Build Tools 36 的 `zipalign -c -P 16 4` 通过；APK 内含 `assets/dexopt/baseline.prof` 和 `baseline.profm`。
 - 安装：正式包在 `Pixel_9` / API 35 冷启动成功；UI 树滚动节点为 0，crash buffer 为空。切换 debug 到 release 签名时仅清除了该模拟器内的测试数据。
 
-尚未完成的 30 分钟后台记录、最终候选版本号与签名升级复验、设备重启、低存储和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用上述聚焦短路径替代。
+Pixel_9 / API 35 的 30 分钟后台记录已经完成；尚未完成的 API 27/API 29 同类回归、最终候选版本号与签名升级复验、设备重启、低存储和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用上述聚焦短路径或单一 API 长测替代。

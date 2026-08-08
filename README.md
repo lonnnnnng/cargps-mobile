@@ -27,7 +27,7 @@ mobile/
 - Git 提交：`0995eb2`
 - 安装包：`CarGPS-Mobile-v0.2.0.apk`，版本 `0.2.0 (3)`
 - SHA-256：`8fc1238c1fdc45db0e49d3d78243abdfe834fe15e87008e53004ae3eea366bc2`
-- 当前开发线：`v0.2.0` 之后的 M1-M7；M1-M7 已提交并完成 Pixel_9 核心验证，API 27/29/31/33 聚焦回归和跨版本位置权限矩阵均已通过。
+- 当前开发线：`v0.2.0` 之后的 M1-M7；M1-M7 已提交并完成 Pixel_9 核心验证，API 27/29/31/33 聚焦回归和跨版本位置权限矩阵均已通过，Pixel_9 / API 35 的 30 分钟后台回归也已通过。
 - API 27/API 29 已完成公开正式 `v0.2.0` 到当前同签名 Release 的覆盖升级，活动行程从 SQLite v3 无损迁移到 Room v4。
 - 当前开发构建仍沿用 `0.2.0 (3)`；下一版本号、tag 和 Release 尚未确定，也不能把当前验证表述为新版本已经发布。
 
@@ -65,12 +65,12 @@ mobile/
 - 共用缺陷修复需要按需移植并在各自设备上独立验证。
 - 本项目不包含车机 UI、车机产品规格或车机发布资产。
 - 本地签名文件没有从车机项目复制；Release 构建仍通过 `ANDROID_SIGNING_*` 环境变量注入签名。
-- M2 已在 API 27/API 29/API 31 完成开始、Home、单定位线程、结束和资源清理短路径；API 31 还通过了锁屏保持前台记录。连续 30 分钟与真实道路长测仍是发布前风险门禁。
+- M2 已在 API 27/API 29/API 31 完成开始、Home、单定位线程、结束和资源清理短路径；API 31 还通过了锁屏保持前台记录。Pixel_9 / API 35 已完成 41 个样本、1831 秒的 Home、系统设置、锁屏和解锁返回回归，期间同一 PID、单定位线程、前台服务和通知持续，结束后资源完整清理。API 27/API 29 的完整 30 分钟与真实道路长测仍是发布前风险门禁。
 - M3 已在 Pixel_9、API 27 和 API 29 通过普通进程 `SIGKILL` 恢复验证；恢复上限是最后确认检查点，最多约 1 秒的内存尾批仍不承诺零丢点，`force-stop` 也不会被描述为普通系统恢复。
 - M4 的 Room v1-v4、事务契约、损坏护栏和失败回滚已在 API 27/29/33 各通过 12/12 instrumentation；API 27/API 29 上公开正式 `v0.2.0` 覆盖当前同证书 Release 后，活动状态、开始时间、点数、距离和点序列均保持不变。
 - M5 策略实现、11 个 JVM 场景和 Pixel_9 完整权限矩阵已通过；API 27/29/31/33 已完成精确/近似适用分支、首次/永久拒绝、应用设置返回和系统定位关闭/恢复，API 33 通知首次/永久拒绝也已实机化验证。权限状态机不再是当前发布阻断项。
 - M6 已提交为 `19fa99c`：单一 `Channel.UNLIMITED` 事件队列固定先恢复，Service 通过统一定位策略区分可见预览、Start 等待和已确认活动行程。本地 44/44 与 24/24 JVM、完整构建关卡、Pixel_9 instrumentation 12/12 与 6/6，以及开始/重复 ensure/结束短路径均已通过。
-- M7 已在 Pixel_9 重新生成 50,591 行 Baseline Profile 和 49,417 行 Startup Profile，旧 `DashboardViewModel` 类名命中为 0；Release APK 内含新的 `baseline.prof` 与 `baseline.profm`。两轮冷启动对照中 Profile 中位数分别比无预编译快约 17.4% 和 18.2%。下一版仍必须完成跨 API 30 分钟回归；真实设备 2 小时长测继续分阶段推进，AGP 9 保持延后。
+- M7 已在 Pixel_9 重新生成 50,591 行 Baseline Profile 和 49,417 行 Startup Profile，旧 `DashboardViewModel` 类名命中为 0；Release APK 内含新的 `baseline.prof` 与 `baseline.profm`。两轮冷启动对照中 Profile 中位数分别比无预编译快约 17.4% 和 18.2%。Pixel_9 / API 35 的 30 分钟回归已通过，下一版仍必须完成 API 27/API 29 的同类回归；真实设备 2 小时长测继续分阶段推进，AGP 9 保持延后。
 - 正式候选生成后必须先提升 `versionCode`/`versionName`，再用最终签名 APK 重跑旧包覆盖升级；当前同版本号构建的验证只证明代码、签名和数据迁移链可行。
 
 ## 文档与验证资料
@@ -82,7 +82,7 @@ mobile/
 - [测试与性能基线](./docs/testing.md)
 - [剩余高风险迁移项](./docs/migration-risks.md)
 - [ADR-0001：采用系统 LocationManager](./docs/adr/0001-use-platform-locationmanager.md)
-- [截图、UI 树与发布产物说明](./artifacts/README.md)：`v0.2.0` Pixel_9 验证文件保存在本地 `artifacts/release-v0.2.0/`，默认不提交 Git。
+- [截图、UI 树与发布产物说明](./artifacts/README.md)：`v0.2.0` Pixel_9 验证文件保存在本地 `artifacts/release-v0.2.0/`；API 35 的 30 分钟回归摘要为 `artifacts/cargps-mobile-api35-30min-summary.md`，这些产物默认不提交 Git。
 
 ## 常用验证命令
 
