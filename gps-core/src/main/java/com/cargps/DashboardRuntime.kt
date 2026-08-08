@@ -31,6 +31,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -76,6 +77,8 @@ data class DashboardState(
     val tripCommandInProgress: Boolean = false,
     val storageError: String? = null,
     val storageBackpressure: Boolean = false,
+    val tripRuntimeError: String? = null,
+    val tripRuntimeRecovering: Boolean = false,
     val foregroundServiceError: String? = null,
     val confirmedTripCheckpoint: ActiveTripCheckpoint? = null,
     val darkTheme: Boolean = true,
@@ -113,12 +116,10 @@ class DashboardRuntime(
         nowProvider = nowProvider,
         storageDispatcher = ioDispatcher,
     )
-    private val tripEvents = TripSessionEventQueue(
-        scope = runtimeScope,
-        currentMode = { sessionCoordinator.state.value.mode },
-        dispatch = sessionCoordinator::dispatch,
-        onResult = ::handleSessionResult,
-    )
+    private var tripEventQueueFailure: String? = null
+    private var tripEventQueueRecoveryAttempts = 0
+    private var recoveringTripEventQueue = false
+    @Volatile private var tripEvents = createTripSessionEventQueue()
 
     init {
         runtimeScope.launch {
@@ -129,7 +130,8 @@ class DashboardRuntime(
     }
 
     suspend fun awaitInitialRestore(): DashboardState = state.first { dashboardState ->
-        dashboardState.storageReady || dashboardState.storageError != null
+        dashboardState.storageReady || dashboardState.storageError != null ||
+            (dashboardState.tripRuntimeError != null && !dashboardState.tripRuntimeRecovering)
     }
 
     fun onPermissionRequired() = update { copy(fixStatus = FixStatus.PERMISSION_REQUIRED, speedKmh = null) }
@@ -181,7 +183,7 @@ class DashboardRuntime(
         // 作者：long｜状态流可能晚于存储线程回调，先直接检查协调器状态，避免背压窗口继续接收新点。
         val sessionState = sessionCoordinator.state.value
         val storageInputBlocked = sessionState.persistence == TripPersistenceState.FAILED ||
-            sessionState.storageBackpressure
+            sessionState.storageBackpressure || tripEventQueueFailure != null
         if (storageInputBlocked) {
             breakLocationSegment()
         }
@@ -350,6 +352,11 @@ class DashboardRuntime(
     }
 
     private fun handleSessionResult(result: TripSessionResult) {
+        if (recoveringTripEventQueue) {
+            // 作者：long｜新 actor 的首个 Restore 已返回，清除临时故障并允许 Service 按恢复后的确认状态重新注册定位。
+            recoveringTripEventQueue = false
+            tripEventQueueFailure = null
+        }
         // 作者：long｜等待型命令返回前同步发布确认状态，避免 Service 开启定位后首个回调仍读取旧行程模式。
         publishSessionState(result.state)
         when (result) {
@@ -374,18 +381,58 @@ class DashboardRuntime(
             // 作者：long｜异步存储错误可能不经过当前定位事件的结果回调，状态流进入失败时也要切断定位段。
             breakLocationSegment()
         }
+        val runtimeError = tripEventQueueFailure
         update {
             copy(
                 tripMode = sessionState.mode,
                 tripStats = sessionState.stats,
                 recentTrips = sessionState.recentTrips,
                 restoredTrip = sessionState.restoredTrip,
-                storageReady = sessionState.storageReady,
-                tripCommandInProgress = sessionState.persistence == TripPersistenceState.PROCESSING,
+                storageReady = sessionState.storageReady && runtimeError == null,
+                tripCommandInProgress = runtimeError == null &&
+                    sessionState.persistence == TripPersistenceState.PROCESSING,
                 storageError = sessionState.storageError,
                 storageBackpressure = sessionState.storageBackpressure,
+                tripRuntimeError = runtimeError,
+                tripRuntimeRecovering = recoveringTripEventQueue,
                 confirmedTripCheckpoint = sessionState.confirmedCheckpoint,
             )
+        }
+    }
+
+    private fun createTripSessionEventQueue(): TripSessionEventQueue = TripSessionEventQueue(
+        scope = runtimeScope,
+        currentMode = { sessionCoordinator.state.value.mode },
+        dispatch = sessionCoordinator::dispatch,
+        onResult = ::handleSessionResult,
+        onTerminalFailure = ::handleTripEventQueueFailure,
+    )
+
+    private fun handleTripEventQueueFailure(error: Throwable) {
+        val message = "行程事件处理异常：${error.message ?: error.javaClass.simpleName}"
+        val shouldRecover = tripEventQueueRecoveryAttempts < MAX_EVENT_QUEUE_RECOVERY_ATTEMPTS
+        if (shouldRecover) {
+            tripEventQueueRecoveryAttempts += 1
+        }
+        recoveringTripEventQueue = shouldRecover
+        tripEventQueueFailure = message
+        breakLocationSegment()
+        update {
+            copy(
+                storageReady = false,
+                tripCommandInProgress = false,
+                tripRuntimeError = message,
+                tripRuntimeRecovering = shouldRecover,
+            )
+        }
+
+        if (!shouldRecover) return
+        runtimeScope.launch {
+            // 作者：long｜等待旧 actor 完成 finally 后再替换引用，避免构造期或失败回调重入把新队列覆盖回已终止实例。
+            yield()
+            if (tripEventQueueFailure != null && runtimeJob.isActive) {
+                tripEvents = createTripSessionEventQueue()
+            }
         }
     }
 
@@ -401,6 +448,7 @@ class DashboardRuntime(
 
     companion object {
         private const val MOVING_THRESHOLD_MPS = 2.0 / 3.6
+        private const val MAX_EVENT_QUEUE_RECOVERY_ATTEMPTS = 1
 
         val TIME_FORMATTER: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
             .withZone(ZoneId.systemDefault())

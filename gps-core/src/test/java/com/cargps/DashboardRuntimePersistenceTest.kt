@@ -9,6 +9,7 @@ import com.cargps.storage.ActiveTripLoadResult
 import com.cargps.storage.CompletedTripRecord
 import com.cargps.storage.TripStorage
 import com.cargps.storage.TripStorageBackpressureException
+import kotlinx.coroutines.CancellationException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -20,6 +21,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -121,12 +124,16 @@ class DashboardRuntimePersistenceTest {
             storage = storage,
             ioDispatcher = Dispatchers.Default,
         )
-        advanceUntilIdle()
+        // 作者：long｜真实 IO 调度器不受测试调度器的 advance 控制，必须等待 Restore 明确发布可用状态后再验证检查点。
+        assertTrue(runtime.awaitInitialRestore().storageReady)
 
+        val entered = CountDownLatch(1)
         val gate = CountDownLatch(1)
+        storage.awaitEntered = entered
         storage.awaitGate = gate
         val checkpoint = async { runtime.checkpointTripWritesAndAwait() }
         runCurrent()
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
         assertFalse(checkpoint.isCompleted)
 
         gate.countDown()
@@ -249,6 +256,118 @@ class DashboardRuntimePersistenceTest {
     }
 
     @Test
+    fun `事件 actor 异常后从确认边界自动恢复并断开故障窗口`() = runTest(mainDispatcherRule.dispatcher) {
+        val storage = FakeTripStorage()
+        val runtime = DashboardRuntime(
+            scope = this,
+            storage = storage,
+            ioDispatcher = Dispatchers.Default,
+        )
+        assertTrue(runtime.awaitInitialRestore().storageReady)
+        runtime.startTripAndAwait(1_000L)
+        runtime.onLocationSample(
+            sample = LocationSample(2_000L, 0.0, 0.0, accuracyMeters = 5f, speedMps = 8f),
+            distanceToPreviousMeters = 0.0,
+        )
+        advanceUntilIdle()
+
+        val recoveryRestoreEntered = CountDownLatch(1)
+        val releaseRecoveryRestore = CountDownLatch(1)
+        storage.loadEntered = recoveryRestoreEntered
+        storage.loadGate = releaseRecoveryRestore
+        storage.appendCancellation = CancellationException("injected actor failure")
+
+        runtime.onLocationSample(
+            sample = LocationSample(3_000L, 0.001, 0.0, accuracyMeters = 5f, speedMps = 8f),
+            distanceToPreviousMeters = 111.0,
+        )
+        runCurrent()
+        assertTrue(recoveryRestoreEntered.await(5, TimeUnit.SECONDS))
+        assertEquals(TripMode.RECORDING, runtime.state.value.tripMode)
+        assertFalse(runtime.state.value.storageReady)
+        assertTrue(runtime.state.value.tripRuntimeRecovering)
+        assertTrue(runtime.state.value.tripRuntimeError?.contains("injected actor failure") == true)
+
+        runtime.onLocationSample(
+            sample = LocationSample(3_500L, 0.0015, 0.0, accuracyMeters = 5f, speedMps = 8f),
+            distanceToPreviousMeters = 55.5,
+        )
+        assertEquals(2, storage.appendCalls)
+
+        releaseRecoveryRestore.countDown()
+        val restored = withTimeout(5_000L) {
+            runtime.state.first { state -> state.storageReady && state.tripRuntimeError == null }
+        }
+        assertEquals(TripMode.RECORDING, restored.tripMode)
+        assertFalse(restored.tripRuntimeRecovering)
+        assertEquals(1, storage.persistedPoints.size)
+
+        runtime.onLocationSample(
+            sample = LocationSample(4_000L, 0.002, 0.0, accuracyMeters = 5f, speedMps = 8f),
+            distanceToPreviousMeters = 111.0,
+        )
+        advanceUntilIdle()
+
+        // 作者：long｜actor 恢复后首点必须从确认边界重新分段，不能把失败点或恢复等待期间的点补算进里程。
+        assertEquals(3, storage.appendCalls)
+        assertEquals(2, storage.persistedPoints.size)
+        assertEquals(0.0, storage.persistedPoints.last().distanceFromPreviousMeters, 0.001)
+        runtime.close()
+    }
+
+    @Test
+    fun `初始恢复 actor 异常时等待自动重建结果`() = runTest(mainDispatcherRule.dispatcher) {
+        val recoveryRestoreEntered = CountDownLatch(1)
+        val releaseRecoveryRestore = CountDownLatch(1)
+        val storage = FakeTripStorage().apply {
+            loadCancellationsRemaining = 1
+            loadEntered = recoveryRestoreEntered
+            loadGate = releaseRecoveryRestore
+        }
+        val runtime = DashboardRuntime(
+            scope = this,
+            storage = storage,
+            ioDispatcher = Dispatchers.Default,
+        )
+        val initialRestore = async { runtime.awaitInitialRestore() }
+        runCurrent()
+
+        assertTrue(recoveryRestoreEntered.await(5, TimeUnit.SECONDS))
+        assertTrue(runtime.state.value.tripRuntimeRecovering)
+        assertFalse(initialRestore.isCompleted)
+
+        releaseRecoveryRestore.countDown()
+        val restored = withTimeout(5_000L) { initialRestore.await() }
+
+        // 作者：long｜START_STICKY 必须等自动重建的 Restore 真正结束，不能把中间错误误判为最终恢复失败并提前停服。
+        assertTrue(restored.storageReady)
+        assertFalse(restored.tripRuntimeRecovering)
+        assertEquals(null, restored.tripRuntimeError)
+        assertEquals(2, storage.loadCalls)
+        runtime.close()
+    }
+
+    @Test
+    fun `事件 actor 每个 Runtime 最多自动重建一次`() = runTest(mainDispatcherRule.dispatcher) {
+        val storage = FakeTripStorage().apply {
+            loadCancellationsRemaining = 2
+        }
+        val runtime = DashboardRuntime(
+            scope = this,
+            storage = storage,
+            ioDispatcher = Dispatchers.Default,
+        )
+
+        val terminalState = runtime.awaitInitialRestore()
+
+        assertFalse(terminalState.storageReady)
+        assertFalse(terminalState.tripRuntimeRecovering)
+        assertTrue(terminalState.tripRuntimeError?.contains("injected restore actor failure") == true)
+        assertEquals(2, storage.loadCalls)
+        runtime.close()
+    }
+
+    @Test
     fun `暂停状态结束行程时暂停时长只累计一次`() = runTest(mainDispatcherRule.dispatcher) {
         val storage = FakeTripStorage(
             activeTrip = ActiveTripRecord(
@@ -299,14 +418,31 @@ class DashboardRuntimePersistenceTest {
     ) : TripStorage {
         val completed = mutableListOf<CompletedTripRecord>()
         var appendFailure: Throwable? = null
+        var appendCancellation: CancellationException? = null
         var appendCalls: Int = 0
+        var awaitEntered: CountDownLatch? = null
         var awaitGate: CountDownLatch? = null
+        var loadEntered: CountDownLatch? = null
+        var loadGate: CountDownLatch? = null
+        var loadCancellationsRemaining: Int = 0
+        var loadCalls: Int = 0
 
         val persistedPoints: List<TripPoint>
             get() = activeTrip?.points.orEmpty()
 
         override fun loadActiveTrip(): ActiveTripLoadResult {
+            loadCalls += 1
             loadFailure?.let { throw it }
+            if (loadCancellationsRemaining > 0) {
+                loadCancellationsRemaining -= 1
+                throw CancellationException("injected restore actor failure")
+            }
+            loadEntered?.countDown()
+            loadGate?.let { gate ->
+                check(gate.await(5, TimeUnit.SECONDS)) { "测试未释放 actor 恢复读取" }
+                loadEntered = null
+                loadGate = null
+            }
             return activeTrip?.let(ActiveTripLoadResult::Loaded) ?: ActiveTripLoadResult.Empty
         }
 
@@ -331,6 +467,10 @@ class DashboardRuntimePersistenceTest {
 
         override fun appendPoint(point: TripPoint) {
             appendCalls += 1
+            appendCancellation?.let { error ->
+                appendCancellation = null
+                throw error
+            }
             appendFailure?.let { throw it }
             activeTrip = activeTrip?.copy(points = activeTrip.orEmptyPoints() + point)
         }
@@ -353,6 +493,8 @@ class DashboardRuntimePersistenceTest {
         override fun completedTripPoints(tripId: Long): List<TripPoint> = emptyList()
 
         override fun awaitPendingWrites() {
+            // 作者：long｜先向测试线程确认已经进入持久化尾批等待，避免把线程调度延迟误判成检查点提前返回。
+            awaitEntered?.countDown()
             val gate = awaitGate ?: return
             check(gate.await(5, TimeUnit.SECONDS)) { "测试存储确认等待超时" }
         }

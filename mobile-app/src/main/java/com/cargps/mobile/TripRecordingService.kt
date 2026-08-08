@@ -267,7 +267,9 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         val activeTrip = state.tripMode != TripMode.IDLE
         val access = currentTripAccessState()
         if (activeTrip) startRequested = false
-        if (state.tripMode == TripMode.IDLE && !state.tripCommandInProgress && state.storageError != null) {
+        if (state.tripMode == TripMode.IDLE && !state.tripCommandInProgress &&
+            (state.storageError != null || state.tripRuntimeError != null)
+        ) {
             startRequested = false
         }
 
@@ -349,10 +351,14 @@ class TripRecordingService : Service(), LocationEngine.Listener {
     private fun buildNotification(state: DashboardState): Notification {
         val openAppPendingIntent = openAppPendingIntent(this)
         val endTripPendingIntent = endTripPendingIntent(this)
-        val statusText = when (state.tripMode) {
-            TripMode.IDLE -> "正在确认行程存储"
-            TripMode.RECORDING -> if (isStorageInputBlocked(state)) "等待存储恢复" else "正在记录"
-            TripMode.PAUSED -> "行程已暂停"
+        val statusText = if (state.tripRuntimeError != null) {
+            "行程处理异常"
+        } else {
+            when (state.tripMode) {
+                TripMode.IDLE -> "正在确认行程存储"
+                TripMode.RECORDING -> if (isStorageInputBlocked(state)) "等待存储恢复" else "正在记录"
+                TripMode.PAUSED -> "行程已暂停"
+            }
         }
         val distanceText = String.format(Locale.CHINA, "%.2f km", state.tripStats.distanceMeters / 1_000.0)
 
@@ -414,7 +420,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             sessionPhase = sessionPhase,
             access = access,
             storageBackpressure = state.storageBackpressure,
-            storageFailure = state.storageError != null,
+            storageFailure = state.storageError != null || state.tripRuntimeError != null,
         )
         if (action == LocationEngineAction.START) {
             runtime.onForegroundServiceError(null)
@@ -425,7 +431,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
     }
 
     private fun isStorageInputBlocked(state: DashboardState): Boolean =
-        state.storageBackpressure || state.storageError != null
+        state.storageBackpressure || state.storageError != null || state.tripRuntimeError != null
 
     companion object {
         internal const val ACTION_START_TRIP = "com.cargps.mobile.action.START_TRIP"

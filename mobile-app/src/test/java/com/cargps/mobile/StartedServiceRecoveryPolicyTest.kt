@@ -39,4 +39,25 @@ class StartedServiceRecoveryPolicyTest {
             decideStartedServiceRecovery(DashboardState(storageError = "database unavailable")),
         )
     }
+
+    @Test
+    fun `事件 actor 恢复失败时不继续等待或误启定位`() {
+        assertEquals(
+            StartedServiceRecoveryAction.STOP_RESTORE_FAILED,
+            decideStartedServiceRecovery(DashboardState(tripRuntimeError = "行程事件处理异常")),
+        )
+    }
+
+    @Test
+    fun `事件 actor 自动重建期间继续保持恢复前台状态`() {
+        assertEquals(
+            StartedServiceRecoveryAction.WAIT_FOR_STORAGE,
+            decideStartedServiceRecovery(
+                DashboardState(
+                    tripRuntimeError = "行程事件处理异常",
+                    tripRuntimeRecovering = true,
+                ),
+            ),
+        )
+    }
 }

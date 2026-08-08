@@ -11,7 +11,9 @@ internal enum class StartedServiceRecoveryAction {
 }
 
 internal fun decideStartedServiceRecovery(state: DashboardState): StartedServiceRecoveryAction = when {
-    state.storageError != null -> StartedServiceRecoveryAction.STOP_RESTORE_FAILED
+    state.tripRuntimeRecovering -> StartedServiceRecoveryAction.WAIT_FOR_STORAGE
+    state.storageError != null || state.tripRuntimeError != null ->
+        StartedServiceRecoveryAction.STOP_RESTORE_FAILED
     !state.storageReady -> StartedServiceRecoveryAction.WAIT_FOR_STORAGE
     state.tripMode != TripMode.IDLE -> StartedServiceRecoveryAction.RESUME_ACTIVE_TRIP
     else -> StartedServiceRecoveryAction.STOP_NO_ACTIVE_TRIP

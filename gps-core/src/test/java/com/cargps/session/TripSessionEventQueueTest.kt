@@ -4,12 +4,12 @@ import com.cargps.TripMode
 import com.cargps.domain.TripPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -70,6 +70,7 @@ class TripSessionEventQueueTest {
                 TripSessionResult.Confirmed(TripSessionState(storageReady = true))
             },
             onResult = {},
+            onTerminalFailure = {},
         )
         runCurrent()
 
@@ -96,6 +97,7 @@ class TripSessionEventQueueTest {
                 TripSessionResult.Confirmed(TripSessionState(storageReady = true))
             },
             onResult = {},
+            onTerminalFailure = {},
         )
         runCurrent()
         val start = async { queue.dispatchAndAwait(TripSessionCommand.Start(1_000L)) }
@@ -126,6 +128,7 @@ class TripSessionEventQueueTest {
                 TripSessionResult.Confirmed(TripSessionState(storageReady = true))
             },
             onResult = {},
+            onTerminalFailure = {},
         )
         runCurrent()
 
@@ -156,6 +159,7 @@ class TripSessionEventQueueTest {
                 )
             },
             onResult = {},
+            onTerminalFailure = {},
         )
         runCurrent()
 
@@ -183,22 +187,24 @@ class TripSessionEventQueueTest {
     @Test
     fun `命令异常后队列拒绝新事件并向等待者传播原始错误`() = runTest {
         val expected = IllegalStateException("unexpected dispatch failure")
-        val uncaught = CompletableDeferred<Throwable>()
-        val queueScope = CoroutineScope(
-            SupervisorJob() + StandardTestDispatcher(testScheduler) +
-                CoroutineExceptionHandler { _, error -> uncaught.complete(error) },
-        )
+        val terminalFailure = CompletableDeferred<Throwable>()
         val queue = TripSessionEventQueue(
-            scope = queueScope,
+            scope = backgroundScope,
             currentMode = { TripMode.IDLE },
             dispatch = { command ->
                 if (command is TripSessionCommand.Start) throw expected
                 TripSessionResult.Confirmed(TripSessionState(storageReady = true))
             },
             onResult = {},
+            onTerminalFailure = { error -> terminalFailure.complete(error) },
         )
         runCurrent()
-        val start = queueScope.async { queue.dispatchAndAwait(TripSessionCommand.Start(1_000L)) }
+        val callerScope = CoroutineScope(
+            SupervisorJob() + StandardTestDispatcher(testScheduler),
+        )
+        val start = callerScope.async {
+            queue.dispatchAndAwait(TripSessionCommand.Start(1_000L))
+        }
 
         runCurrent()
 
@@ -208,10 +214,14 @@ class TripSessionEventQueueTest {
         } catch (error: Throwable) {
             error
         }
+        // 作者：long｜等待者使用监督作用域隔离预期失败；await 的协程栈恢复可能复制异常实例，
+        // 但异常类型、消息和 cause 链必须保留 actor 抛出的原始错误。
         assertTrue(failure is IllegalStateException)
         assertEquals(expected.message, failure?.message)
-        assertSame(expected, uncaught.await())
+        assertTrue(failure === expected || failure?.cause === expected)
+        assertSame(expected, terminalFailure.await())
         assertFalse(queue.tryDispatch(TripSessionCommand.Checkpoint))
+        callerScope.cancel()
         queue.close()
     }
 
@@ -233,6 +243,7 @@ class TripSessionEventQueueTest {
                 TripSessionResult.Confirmed(TripSessionState(mode = mode, storageReady = true))
             },
             onResult = {},
+            onTerminalFailure = {},
         )
 
         queue.tryToggle(1_000L)
@@ -265,5 +276,6 @@ class TripSessionEventQueueTest {
             TripSessionResult.Accepted(TripSessionState(storageReady = true))
         },
         onResult = {},
+        onTerminalFailure = {},
     )
 }

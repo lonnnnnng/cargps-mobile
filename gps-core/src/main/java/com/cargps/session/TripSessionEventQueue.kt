@@ -2,6 +2,7 @@ package com.cargps.session
 
 import com.cargps.TripMode
 import java.io.Closeable
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -25,7 +26,9 @@ internal class TripSessionEventQueue(
     private val currentMode: () -> TripMode,
     private val dispatch: suspend (TripSessionCommand) -> TripSessionResult,
     private val onResult: (TripSessionResult) -> Unit,
+    private val onTerminalFailure: (Throwable) -> Unit,
 ) : Closeable {
+    private val closedByOwner = AtomicBoolean(false)
     private val terminalCause = AtomicReference<Throwable?>(null)
     private val events = Channel<QueuedEvent>(Channel.UNLIMITED)
     private val eventJob: Job = scope.launch {
@@ -35,7 +38,10 @@ internal class TripSessionEventQueue(
         } catch (error: Throwable) {
             // 作者：long｜actor 异常后先关闭入口，避免调用方收到“已入队”但事件永远无人消费。
             terminate(error)
-            throw error
+            if (!closedByOwner.get()) {
+                // 作者：long｜未预期异常必须交给 Runtime 进入可见恢复流程，不能依赖未捕获协程异常让进程随机崩溃。
+                runCatching { onTerminalFailure(error) }
+            }
         } finally {
             terminate(CancellationException("行程事件队列已停止"))
         }
@@ -76,6 +82,7 @@ internal class TripSessionEventQueue(
     }
 
     override fun close() {
+        closedByOwner.set(true)
         val cause = CancellationException("行程事件队列已关闭")
         terminate(cause)
         eventJob.cancel(cause)

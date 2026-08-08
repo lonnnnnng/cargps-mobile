@@ -638,7 +638,7 @@ private fun tripStatusColor(mode: TripMode): Color = when (mode) {
 }
 
 private fun locationHealthDetail(state: DashboardState, tripAccessState: TripAccessState): String =
-    tripAccessDetail(tripAccessState) ?: state.foregroundServiceError ?: state.storageError?.let { error ->
+    tripAccessDetail(tripAccessState) ?: state.tripRuntimeError ?: state.foregroundServiceError ?: state.storageError?.let { error ->
     "行程存储异常：$error"
 } ?: when (state.fixStatus) {
     FixStatus.PERMISSION_REQUIRED -> "允许精确定位后才能读取车速与行程"

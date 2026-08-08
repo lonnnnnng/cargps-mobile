@@ -19,18 +19,21 @@ import com.cargps.TripMode
 import com.cargps.domain.TripPoint
 import com.cargps.storage.ActiveTripLoadResult
 import com.cargps.storage.ActiveTripCheckpoint
+import com.cargps.storage.ActiveTripRecord
 import com.cargps.storage.CompletedTripRecord
 import com.cargps.storage.TripStorage
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -260,6 +263,151 @@ class TripRecordingServiceLifecycleInstrumentedTest {
         }
     }
 
+    @Test
+    fun end_request_keeps_preceding_tail_and_rejects_later_location() {
+        grantForegroundLocationPermissions()
+        val storage = BlockingEndTripStorage()
+        val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val runtime = DashboardRuntime(scope = runtimeScope, storage = storage)
+        awaitCondition("runtime restore", 5_000L) { runtime.state.value.storageReady }
+        val location = LocationProbe()
+        val serviceReference = AtomicReference<TripRecordingService>()
+        TripRecordingService.dependenciesFactoryForTests = { service ->
+            serviceReference.set(service)
+            TripRecordingServiceDependencies(
+                runtime = runtime,
+                startLocation = location::start,
+                stopLocation = location::stop,
+                closeLocation = location::close,
+                readAccessState = { TripAccessState.Ready },
+            )
+        }
+
+        try {
+            ContextCompat.startForegroundService(
+                context,
+                TripRecordingService.startTripIntent(context),
+            )
+            awaitCondition("recording service start", 5_000L) {
+                runtime.state.value.tripMode == TripMode.RECORDING && location.starts.get() == 1
+            }
+
+            val firstFixAtMillis = System.currentTimeMillis()
+            serviceReference.get().onLocation(testLocation(firstFixAtMillis, 31.2304, 121.4737))
+            awaitCondition("tail point before end", 5_000L) { storage.appendCalls.get() == 1 }
+
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                serviceReference.get().onStartCommand(
+                    TripRecordingService.endTripIntent(context),
+                    0,
+                    2,
+                )
+            }
+            assertTrue("结束事务没有进入存储", storage.completeEntered.await(5, TimeUnit.SECONDS))
+
+            val lateFixAtMillis = firstFixAtMillis + 1_000L
+            serviceReference.get().onLocation(testLocation(lateFixAtMillis, 31.2305, 121.4738))
+            awaitCondition("late fix remains visible", 5_000L) {
+                runtime.state.value.lastFixAtMillis == lateFixAtMillis
+            }
+            assertEquals(1, storage.appendCalls.get())
+
+            storage.releaseComplete.countDown()
+            awaitCondition("end confirmation", 5_000L) {
+                runtime.state.value.tripMode == TripMode.IDLE && storage.completedPointCount.get() == 1
+            }
+            // 作者：long｜等待下一次 Start 作为队列屏障，证明 End 后入队的定位事件已经被消费并拒绝，而不是尚未执行。
+            runBlocking {
+                runtime.startTripAndAwait(lateFixAtMillis + 1_000L)
+            }
+            assertEquals(1, storage.appendCalls.get())
+            assertEquals(1, storage.completedPointCount.get())
+        } finally {
+            storage.releaseComplete.countDown()
+            runCatching { context.stopService(TripRecordingService.bindIntent(context)) }
+            TripRecordingService.dependenciesFactoryForTests = null
+            runtime.close()
+            runtimeScope.cancel()
+        }
+    }
+
+    @Test
+    fun actor_failure_stops_location_and_recovers_from_confirmed_state() {
+        grantForegroundLocationPermissions()
+        val storage = RecoverableActorFailureStorage()
+        val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val runtime = DashboardRuntime(scope = runtimeScope, storage = storage)
+        awaitCondition("runtime restore", 5_000L) { runtime.state.value.storageReady }
+        val location = LocationProbe()
+        val serviceReference = AtomicReference<TripRecordingService>()
+        TripRecordingService.dependenciesFactoryForTests = { service ->
+            serviceReference.set(service)
+            TripRecordingServiceDependencies(
+                runtime = runtime,
+                startLocation = location::start,
+                stopLocation = location::stop,
+                closeLocation = location::close,
+                readAccessState = { TripAccessState.Ready },
+            )
+        }
+
+        try {
+            ContextCompat.startForegroundService(
+                context,
+                TripRecordingService.startTripIntent(context),
+            )
+            awaitCondition("recording service start", 5_000L) {
+                runtime.state.value.tripMode == TripMode.RECORDING && location.starts.get() == 1
+            }
+
+            serviceReference.get().onLocation(
+                testLocation(System.currentTimeMillis(), 31.2304, 121.4737),
+            )
+            assertTrue(
+                "actor 异常后没有进入确认边界恢复",
+                storage.recoveryRestoreEntered.await(5, TimeUnit.SECONDS),
+            )
+            awaitCondition("actor failure stops location", 5_000L) {
+                runtime.state.value.tripRuntimeError != null && location.stops.get() >= 1
+            }
+            awaitNotificationTitle("行程处理异常", 2_000L)
+
+            storage.releaseRecoveryRestore.countDown()
+            awaitCondition("actor restore restarts location", 5_000L) {
+                runtime.state.value.storageReady &&
+                    runtime.state.value.tripRuntimeError == null &&
+                    runtime.state.value.tripMode == TripMode.RECORDING &&
+                    location.starts.get() == 2
+            }
+            awaitNotificationTitle("正在记录", 2_000L)
+
+            serviceReference.get().onLocation(
+                testLocation(System.currentTimeMillis() + 1_000L, 31.2305, 121.4738),
+            )
+            awaitCondition("location accepted after actor restore", 5_000L) {
+                storage.appendCalls.get() == 2 && storage.persistedPoints.get() == 1
+            }
+        } finally {
+            storage.releaseRecoveryRestore.countDown()
+            runCatching { context.stopService(TripRecordingService.bindIntent(context)) }
+            TripRecordingService.dependenciesFactoryForTests = null
+            runtime.close()
+            runtimeScope.cancel()
+        }
+    }
+
+    private fun testLocation(
+        timestampMillis: Long,
+        latitude: Double,
+        longitude: Double,
+    ): Location = Location(LocationManager.GPS_PROVIDER).apply {
+        time = timestampMillis
+        this.latitude = latitude
+        this.longitude = longitude
+        accuracy = 5f
+        speed = 3f
+    }
+
     private fun grantForegroundLocationPermissions() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val permissions = buildList {
@@ -465,6 +613,135 @@ class TripRecordingServiceLifecycleInstrumentedTest {
                 confirmedPointCount = 0L,
                 lastConfirmedPointSequence = null,
                 lastConfirmedPointTimestampMillis = null,
+            )
+        }
+    }
+
+    private class BlockingEndTripStorage : TripStorage {
+        val completeEntered = CountDownLatch(1)
+        val releaseComplete = CountDownLatch(1)
+        val appendCalls = AtomicInteger()
+        val completedPointCount = AtomicInteger(-1)
+        private val points = mutableListOf<TripPoint>()
+        @Volatile private var startedAtMillis: Long? = null
+        @Volatile private var mode: TripMode = TripMode.IDLE
+        @Volatile private var completedRecord: CompletedTripRecord? = null
+
+        override fun loadActiveTrip(): ActiveTripLoadResult = startedAtMillis?.let { startedAt ->
+            ActiveTripLoadResult.Loaded(
+                ActiveTripRecord(
+                    mode = mode,
+                    startedAtMillis = startedAt,
+                    pausedAtMillis = null,
+                    totalPausedMillis = 0L,
+                    points = synchronized(points) { points.toList() },
+                ),
+            )
+        } ?: ActiveTripLoadResult.Empty
+
+        override fun startTrip(startedAtMillis: Long) {
+            this.startedAtMillis = startedAtMillis
+            mode = TripMode.RECORDING
+            synchronized(points) { points.clear() }
+        }
+
+        override fun appendPoint(point: TripPoint) {
+            appendCalls.incrementAndGet()
+            synchronized(points) { points += point }
+        }
+
+        override fun updateActiveTrip(mode: TripMode, pausedAtMillis: Long?, totalPausedMillis: Long) {
+            this.mode = mode
+        }
+
+        override fun completeTrip(record: CompletedTripRecord) {
+            completeEntered.countDown()
+            check(releaseComplete.await(5, TimeUnit.SECONDS)) { "测试未释放结束事务" }
+            completedPointCount.set(synchronized(points) { points.size })
+            completedRecord = record
+            startedAtMillis = null
+            mode = TripMode.IDLE
+            synchronized(points) { points.clear() }
+        }
+
+        override fun recentTrips(limit: Int): List<CompletedTripRecord> =
+            completedRecord?.let(::listOf).orEmpty()
+
+        override fun completedTripPoints(tripId: Long): List<TripPoint> = emptyList()
+
+        override fun loadActiveTripCheckpoint(): ActiveTripCheckpoint? = startedAtMillis?.let { startedAt ->
+            val snapshot = synchronized(points) { points.toList() }
+            ActiveTripCheckpoint(
+                startedAtMillis = startedAt,
+                confirmedPointCount = snapshot.size.toLong(),
+                lastConfirmedPointSequence = snapshot.size.toLong().takeIf { it > 0L },
+                lastConfirmedPointTimestampMillis = snapshot.lastOrNull()?.timestampMillis,
+            )
+        }
+    }
+
+    private class RecoverableActorFailureStorage : TripStorage {
+        val recoveryRestoreEntered = CountDownLatch(1)
+        val releaseRecoveryRestore = CountDownLatch(1)
+        val appendCalls = AtomicInteger()
+        val persistedPoints = AtomicInteger()
+        private val loadCalls = AtomicInteger()
+        private val points = mutableListOf<TripPoint>()
+        @Volatile private var startedAtMillis: Long? = null
+        @Volatile private var failNextAppend = true
+
+        override fun loadActiveTrip(): ActiveTripLoadResult {
+            if (loadCalls.incrementAndGet() > 1) {
+                recoveryRestoreEntered.countDown()
+                check(releaseRecoveryRestore.await(5, TimeUnit.SECONDS)) {
+                    "测试未释放 actor 恢复读取"
+                }
+            }
+            return startedAtMillis?.let { startedAt ->
+                ActiveTripLoadResult.Loaded(
+                    ActiveTripRecord(
+                        mode = TripMode.RECORDING,
+                        startedAtMillis = startedAt,
+                        pausedAtMillis = null,
+                        totalPausedMillis = 0L,
+                        points = synchronized(points) { points.toList() },
+                    ),
+                )
+            } ?: ActiveTripLoadResult.Empty
+        }
+
+        override fun startTrip(startedAtMillis: Long) {
+            this.startedAtMillis = startedAtMillis
+        }
+
+        override fun appendPoint(point: TripPoint) {
+            appendCalls.incrementAndGet()
+            if (failNextAppend) {
+                failNextAppend = false
+                throw CancellationException("injected actor failure")
+            }
+            synchronized(points) { points += point }
+            persistedPoints.incrementAndGet()
+        }
+
+        override fun updateActiveTrip(mode: TripMode, pausedAtMillis: Long?, totalPausedMillis: Long) = Unit
+
+        override fun completeTrip(record: CompletedTripRecord) {
+            startedAtMillis = null
+            synchronized(points) { points.clear() }
+        }
+
+        override fun recentTrips(limit: Int): List<CompletedTripRecord> = emptyList()
+
+        override fun completedTripPoints(tripId: Long): List<TripPoint> = emptyList()
+
+        override fun loadActiveTripCheckpoint(): ActiveTripCheckpoint? = startedAtMillis?.let { startedAt ->
+            val snapshot = synchronized(points) { points.toList() }
+            ActiveTripCheckpoint(
+                startedAtMillis = startedAt,
+                confirmedPointCount = snapshot.size.toLong(),
+                lastConfirmedPointSequence = snapshot.size.toLong().takeIf { it > 0L },
+                lastConfirmedPointTimestampMillis = snapshot.lastOrNull()?.timestampMillis,
             )
         }
     }
