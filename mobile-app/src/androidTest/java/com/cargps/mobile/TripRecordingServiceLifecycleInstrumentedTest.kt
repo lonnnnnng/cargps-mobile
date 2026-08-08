@@ -205,6 +205,61 @@ class TripRecordingServiceLifecycleInstrumentedTest {
         }
     }
 
+    @Test
+    fun task_removal_checkpoint_survives_service_scope_cancellation() {
+        grantForegroundLocationPermissions()
+        val storage = TaskRemovalCheckpointStorage()
+        val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val runtime = DashboardRuntime(scope = runtimeScope, storage = storage)
+        awaitCondition("runtime restore", 5_000L) { runtime.state.value.storageReady }
+        val location = LocationProbe()
+        val serviceReference = AtomicReference<TripRecordingService>()
+        TripRecordingService.dependenciesFactoryForTests = { service ->
+            serviceReference.set(service)
+            TripRecordingServiceDependencies(
+                runtime = runtime,
+                startLocation = location::start,
+                stopLocation = location::stop,
+                closeLocation = location::close,
+                readAccessState = { TripAccessState.Ready },
+            )
+        }
+
+        try {
+            ContextCompat.startForegroundService(
+                context,
+                TripRecordingService.startTripIntent(context),
+            )
+            awaitCondition("recording service start", 5_000L) {
+                runtime.state.value.tripMode == TripMode.RECORDING && location.starts.get() == 1
+            }
+
+            storage.blockCheckpoint = true
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                serviceReference.get().onTaskRemoved(null)
+            }
+            assertTrue(
+                "任务移除没有进入尾批检查点",
+                storage.checkpointEntered.await(5, TimeUnit.SECONDS),
+            )
+
+            context.stopService(TripRecordingService.bindIntent(context))
+            awaitCondition("service scope cancellation", 5_000L) { location.closes.get() > 0 }
+
+            storage.releaseCheckpoint.countDown()
+            awaitCondition("checkpoint completion after service destroy", 5_000L) {
+                storage.checkpointCompletions.get() == 1 &&
+                    runtime.state.value.confirmedTripCheckpoint != null
+            }
+        } finally {
+            storage.releaseCheckpoint.countDown()
+            runCatching { context.stopService(TripRecordingService.bindIntent(context)) }
+            TripRecordingService.dependenciesFactoryForTests = null
+            runtime.close()
+            runtimeScope.cancel()
+        }
+    }
+
     private fun grantForegroundLocationPermissions() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val permissions = buildList {
@@ -370,5 +425,47 @@ class TripRecordingServiceLifecycleInstrumentedTest {
             lastConfirmedPointSequence = null,
             lastConfirmedPointTimestampMillis = null,
         )
+    }
+
+    private class TaskRemovalCheckpointStorage : TripStorage {
+        val checkpointEntered = CountDownLatch(1)
+        val releaseCheckpoint = CountDownLatch(1)
+        val checkpointCompletions = AtomicInteger()
+        @Volatile var blockCheckpoint = false
+        @Volatile private var startedAtMillis: Long? = null
+
+        override fun loadActiveTrip(): ActiveTripLoadResult = ActiveTripLoadResult.Empty
+
+        override fun startTrip(startedAtMillis: Long) {
+            this.startedAtMillis = startedAtMillis
+        }
+
+        override fun appendPoint(point: TripPoint) = Unit
+
+        override fun updateActiveTrip(mode: TripMode, pausedAtMillis: Long?, totalPausedMillis: Long) = Unit
+
+        override fun completeTrip(record: CompletedTripRecord) {
+            startedAtMillis = null
+        }
+
+        override fun recentTrips(limit: Int): List<CompletedTripRecord> = emptyList()
+
+        override fun completedTripPoints(tripId: Long): List<TripPoint> = emptyList()
+
+        override fun awaitPendingWrites() {
+            if (!blockCheckpoint) return
+            checkpointEntered.countDown()
+            check(releaseCheckpoint.await(5, TimeUnit.SECONDS)) { "测试未释放任务移除检查点" }
+            checkpointCompletions.incrementAndGet()
+        }
+
+        override fun loadActiveTripCheckpoint(): ActiveTripCheckpoint? = startedAtMillis?.let { startedAt ->
+            ActiveTripCheckpoint(
+                startedAtMillis = startedAt,
+                confirmedPointCount = 0L,
+                lastConfirmedPointSequence = null,
+                lastConfirmedPointTimestampMillis = null,
+            )
+        }
     }
 }

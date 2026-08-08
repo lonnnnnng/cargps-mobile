@@ -10,6 +10,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
+internal enum class TripEventCallerCancellationPolicy {
+    SKIP_IF_NOT_STARTED,
+    KEEP_QUEUED,
+}
+
 /**
  * 作者：long
  *
@@ -42,14 +47,30 @@ internal class TripSessionEventQueue(
     fun tryToggle(atMillis: Long): Boolean =
         events.trySend(QueuedEvent.Toggle(atMillis)).isSuccess
 
-    suspend fun dispatchAndAwait(command: TripSessionCommand): TripSessionResult {
+    suspend fun dispatchAndAwait(
+        command: TripSessionCommand,
+        callerCancellationPolicy: TripEventCallerCancellationPolicy =
+            TripEventCallerCancellationPolicy.SKIP_IF_NOT_STARTED,
+    ): TripSessionResult {
         val completion = CompletableDeferred<TripSessionResult>()
+        val queued = events.trySend(
+            QueuedEvent.Command(
+                command = command,
+                completion = completion,
+                skipWhenCompletionInactive =
+                    callerCancellationPolicy == TripEventCallerCancellationPolicy.SKIP_IF_NOT_STARTED,
+            ),
+        )
+        if (queued.isFailure) {
+            throw queued.exceptionOrNull() ?: CancellationException("行程事件队列拒绝命令")
+        }
         return try {
-            events.send(QueuedEvent.Command(command, completion))
             completion.await()
         } catch (error: CancellationException) {
-            // 作者：long｜Service/Activity 销毁时取消等待不能让尚未消费的命令在恢复后继续产生行程副作用。
-            completion.cancel(error)
+            if (callerCancellationPolicy == TripEventCallerCancellationPolicy.SKIP_IF_NOT_STARTED) {
+                // 作者：long｜Start 等用户命令的等待方销毁后，尚未消费的命令不能在恢复后继续产生行程副作用。
+                completion.cancel(error)
+            }
             throw error
         }
     }
@@ -62,7 +83,7 @@ internal class TripSessionEventQueue(
 
     private suspend fun process(event: QueuedEvent) {
         try {
-            if (event.completion?.isActive == false) {
+            if (event.skipWhenCompletionInactive && event.completion?.isActive == false) {
                 // 作者：long｜等待者已经取消时直接丢弃尚未开始的命令；已经进入 dispatch 的事务仍由其协程取消语义负责。
                 return
             }
@@ -100,15 +121,18 @@ internal class TripSessionEventQueue(
 
     private sealed interface QueuedEvent {
         val completion: CompletableDeferred<TripSessionResult>?
+        val skipWhenCompletionInactive: Boolean
 
         data class Command(
             val command: TripSessionCommand,
             override val completion: CompletableDeferred<TripSessionResult>? = null,
+            override val skipWhenCompletionInactive: Boolean = true,
         ) : QueuedEvent
 
         data class Toggle(
             val atMillis: Long,
             override val completion: CompletableDeferred<TripSessionResult>? = null,
+            override val skipWhenCompletionInactive: Boolean = true,
         ) : QueuedEvent
     }
 }

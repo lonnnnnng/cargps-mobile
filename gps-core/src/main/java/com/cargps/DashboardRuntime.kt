@@ -18,6 +18,7 @@ import com.cargps.session.TripSessionCoordinator
 import com.cargps.session.TripSessionEventQueue
 import com.cargps.session.TripSessionResult
 import com.cargps.session.TripSessionState
+import com.cargps.session.TripEventCallerCancellationPolicy
 import java.io.Closeable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -329,8 +330,12 @@ class DashboardRuntime(
             publishSessionState(sessionCoordinator.state.value)
             return _state.value
         }
-        // 作者：long｜任务被移除后由 Service 在协程中等待尾批确认，成功或失败都要让调用方看到最终存储状态。
-        tripEvents.dispatchAndAwait(TripSessionCommand.Checkpoint)
+        // 作者：long｜任务移除检查点已经进入 Runtime 后，即使 Service 随后销毁也必须继续冲刷；
+        // 这里只抵抗等待方取消，进程已被系统回收时仍以最近确认边界恢复。
+        tripEvents.dispatchAndAwait(
+            command = TripSessionCommand.Checkpoint,
+            callerCancellationPolicy = TripEventCallerCancellationPolicy.KEEP_QUEUED,
+        )
         return _state.value
     }
 

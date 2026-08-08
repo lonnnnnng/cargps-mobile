@@ -22,6 +22,7 @@ import com.cargps.domain.NmeaFrame
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -145,7 +146,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         // 作者：long｜任务移除回调不能阻塞主线程；由 Service 协程等待尾批确认，失败时保留可见错误而不是静默丢失。
-        serviceScope.launch {
+        serviceScope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 runtime.checkpointTripWritesAndAwait()
             } catch (error: CancellationException) {

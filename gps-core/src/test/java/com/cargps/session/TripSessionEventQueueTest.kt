@@ -142,6 +142,45 @@ class TripSessionEventQueueTest {
     }
 
     @Test
+    fun `恢复阻塞期间取消生命周期等待仍会执行已排队检查点`() = runTest {
+        val releaseRestore = CompletableDeferred<Unit>()
+        val commands = mutableListOf<TripSessionCommand>()
+        val queue = TripSessionEventQueue(
+            scope = backgroundScope,
+            currentMode = { TripMode.RECORDING },
+            dispatch = { command ->
+                commands += command
+                if (command is TripSessionCommand.Restore) releaseRestore.await()
+                TripSessionResult.Confirmed(
+                    TripSessionState(mode = TripMode.RECORDING, storageReady = true),
+                )
+            },
+            onResult = {},
+        )
+        runCurrent()
+
+        val checkpoint = async {
+            queue.dispatchAndAwait(
+                command = TripSessionCommand.Checkpoint,
+                callerCancellationPolicy = TripEventCallerCancellationPolicy.KEEP_QUEUED,
+            )
+        }
+        runCurrent()
+        checkpoint.cancelAndJoin()
+        assertTrue(checkpoint.isCancelled)
+
+        releaseRestore.complete(Unit)
+        runCurrent()
+
+        // 作者：long｜任务移除的等待协程可以消失，但已进入 Runtime 的尾批检查点不能随 Service 一起被丢弃。
+        assertEquals(
+            listOf(TripSessionCommand.Restore, TripSessionCommand.Checkpoint),
+            commands,
+        )
+        queue.close()
+    }
+
+    @Test
     fun `命令异常后队列拒绝新事件并向等待者传播原始错误`() = runTest {
         val expected = IllegalStateException("unexpected dispatch failure")
         val uncaught = CompletableDeferred<Throwable>()
