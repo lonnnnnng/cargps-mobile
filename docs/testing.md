@@ -2,7 +2,7 @@
 
 作者：long
 
-更新日期：2026-08-08 09:34:02（北京时间，UTC+8）
+更新日期：2026-08-08 10:15:11（北京时间，UTC+8）
 
 ## 测试分层
 
@@ -133,7 +133,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 本地完整关卡通过：`gps-core` 44/44、手机版 24/24 JVM；AndroidTest 编译、`lintDebug`、`lintVitalRelease`、Debug/Release、R8、资源压缩和 `baselineprofile:assembleBenchmarkRelease` 均成功。
 - Pixel_9 / API 35 instrumentation：`gps-core` 12/12、手机版 6/6。设备由 `emulator-5554` 的 `ro.boot.qemu.avd_name = Pixel_9` 明确确认。
 - Pixel_9 运行时短路径：开始后 UI 为“记录中”，Service 为 `location` 前台类型；以应用 UID 连续两次 ensure 后 `cargps-location` 线程仍为 1；结束后回到“等待开始”且历史增加一段，Home 后 Service 清除，crash buffer 无 CarGPS 记录。
-- API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；Pixel_9 / API 35 与 Android 10 / API 29 的完整 30 分钟 Home/切换应用/锁屏已通过。API 27 的同类 30 分钟、设备重启/低存储和真实设备 2 小时长测仍未完成，较新 API 结果不能替代最低系统门槛。
+- API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的完整 30 分钟 Home/切换应用/锁屏已通过。设备重启/低存储、尾批损失量化和真实设备 2 小时长测仍未完成。
 - API 31 已完成可见开始、`location` 前台服务、Home、锁屏、单定位线程、活动行程撤权阻断和结束后 Home 清理短路径；它仍不计作 30 分钟长测。
 
 ## M7 Baseline Profile 与冷启动对照
@@ -178,4 +178,4 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 对齐与优化：Build Tools 36 的 `zipalign -c -P 16 4` 通过；APK 内含 `assets/dexopt/baseline.prof` 和 `baseline.profm`。
 - 安装：正式包在 `Pixel_9` / API 35 冷启动成功；UI 树滚动节点为 0，crash buffer 为空。切换 debug 到 release 签名时仅清除了该模拟器内的测试数据。
 
-Pixel_9 / API 35 与 Android 10 / API 29 的 30 分钟后台记录已经完成；尚未完成的 API 27 同类回归、最终候选版本号与签名升级复验、设备重启、低存储和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用上述聚焦短路径或较新 API 长测替代。
+Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台记录已经完成；尚未完成的设备重启、低存储、尾批损失量化、最终候选版本号与签名升级复验和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用常规长测替代异常环境门槛。
