@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 class QueuedTripStorageTest {
     @Test
@@ -143,6 +144,22 @@ class QueuedTripStorageTest {
             storage.awaitPendingWrites()
 
             assertEquals(ActiveTripCheckpoint(1_000L, 1L, 1L, 2_000L), confirmation.await())
+        }
+    }
+
+    @Test
+    fun `晚到订阅者仍能收到最近确认检查点`() = runBlocking {
+        val delegate = CheckpointRecordingTripStorage()
+
+        QueuedTripStorage(delegate).use { storage ->
+            storage.startTrip(1_000L)
+            storage.appendPoint(TripPoint(2_000L, 3.0, 4.0, true))
+            storage.awaitPendingWrites()
+
+            assertEquals(
+                ActiveTripCheckpoint(1_000L, 1L, 1L, 2_000L),
+                withTimeout(500L) { storage.confirmedCheckpoints.first() },
+            )
         }
     }
 

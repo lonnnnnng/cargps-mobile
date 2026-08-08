@@ -16,6 +16,10 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.Dispatchers
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class DashboardRuntimePersistenceTest {
@@ -98,6 +102,39 @@ class DashboardRuntimePersistenceTest {
     }
 
     @Test
+    fun `检查点等待存储确认后才返回`() = runTest(mainDispatcherRule.dispatcher) {
+        val expectedCheckpoint = ActiveTripCheckpoint(1_000L, 0L, null, null)
+        val storage = FakeTripStorage(
+            activeTrip = ActiveTripRecord(
+                mode = TripMode.RECORDING,
+                startedAtMillis = 1_000L,
+                pausedAtMillis = null,
+                totalPausedMillis = 0L,
+                points = emptyList(),
+            ),
+            checkpoint = expectedCheckpoint,
+        )
+        val runtime = DashboardRuntime(
+            scope = this,
+            storage = storage,
+            ioDispatcher = Dispatchers.Default,
+        )
+        advanceUntilIdle()
+
+        val gate = CountDownLatch(1)
+        storage.awaitGate = gate
+        val checkpoint = async { runtime.checkpointTripWritesAndAwait() }
+        runCurrent()
+        assertFalse(checkpoint.isCompleted)
+
+        gate.countDown()
+        val result = checkpoint.await()
+        assertEquals(TripMode.RECORDING, result.tripMode)
+        assertEquals(expectedCheckpoint, result.confirmedTripCheckpoint)
+        runtime.close()
+    }
+
+    @Test
     fun `暂停状态结束行程时暂停时长只累计一次`() = runTest(mainDispatcherRule.dispatcher) {
         val storage = FakeTripStorage(
             activeTrip = ActiveTripRecord(
@@ -147,6 +184,7 @@ class DashboardRuntimePersistenceTest {
         private var checkpoint: ActiveTripCheckpoint? = null,
     ) : TripStorage {
         val completed = mutableListOf<CompletedTripRecord>()
+        var awaitGate: CountDownLatch? = null
 
         override fun loadActiveTrip(): ActiveTripLoadResult {
             loadFailure?.let { throw it }
@@ -185,6 +223,11 @@ class DashboardRuntimePersistenceTest {
         override fun recentTrips(limit: Int): List<CompletedTripRecord> = completed.takeLast(limit).reversed()
 
         override fun completedTripPoints(tripId: Long): List<TripPoint> = emptyList()
+
+        override fun awaitPendingWrites() {
+            val gate = awaitGate ?: return
+            check(gate.await(5, TimeUnit.SECONDS)) { "测试存储确认等待超时" }
+        }
 
         private fun ActiveTripRecord?.orEmptyPoints(): List<TripPoint> = this?.points.orEmpty()
     }

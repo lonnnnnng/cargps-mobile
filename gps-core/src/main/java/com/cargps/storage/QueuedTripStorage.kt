@@ -28,7 +28,11 @@ class QueuedTripStorage(
     private var pointFlushScheduled = false
     private var lastWriteFailure: Throwable? = null
     private val mutableErrors = MutableSharedFlow<Throwable>(extraBufferCapacity = 8)
-    private val mutableConfirmedCheckpoints = MutableSharedFlow<ActiveTripCheckpoint>(extraBufferCapacity = 8)
+    // 作者：long｜确认边界是可恢复状态而非一次性事件，Service/Activity 重绑后必须能拿到最近一次成功落盘的位置。
+    private val mutableConfirmedCheckpoints = MutableSharedFlow<ActiveTripCheckpoint>(
+        replay = 1,
+        extraBufferCapacity = 8,
+    )
 
     override val errors = mutableErrors.asSharedFlow()
     override val confirmedCheckpoints = mutableConfirmedCheckpoints.asSharedFlow()

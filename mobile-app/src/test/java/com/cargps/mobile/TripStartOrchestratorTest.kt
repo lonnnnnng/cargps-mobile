@@ -31,7 +31,7 @@ class TripStartOrchestratorTest {
         confirmedState.complete(DashboardState(tripMode = TripMode.RECORDING, storageReady = true))
         start.join()
 
-        assertEquals(listOf("请求结束", "启动定位", "处理状态"), events)
+        assertEquals(listOf("启动定位", "处理状态", "请求结束"), events)
     }
 
     @Test
@@ -53,7 +53,7 @@ class TripStartOrchestratorTest {
             handleState = { events += "处理状态" },
         )
 
-        assertEquals(listOf("请求结束", "处理状态"), events)
+        assertEquals(listOf("处理状态", "请求结束"), events)
     }
 
     @Test
@@ -73,7 +73,7 @@ class TripStartOrchestratorTest {
             handleState = { events += "处理状态" },
         )
 
-        assertEquals(listOf("请求结束", "处理状态"), events)
+        assertEquals(listOf("处理状态", "请求结束"), events)
     }
 
     @Test
@@ -97,5 +97,19 @@ class TripStartOrchestratorTest {
 
         assertEquals(expected, failure)
         assertEquals(listOf("请求结束"), events)
+    }
+
+    @Test
+    fun `清除启动请求前必须先处理最终状态`() = runBlocking {
+        var stateHandled = false
+
+        completeTripStart(
+            requestedAtMillis = 1_000L,
+            awaitStart = { DashboardState(tripMode = TripMode.RECORDING, storageReady = true) },
+            currentAccess = { TripAccessState.Ready },
+            onRequestFinished = { assertTrue(stateHandled) },
+            startLocation = {},
+            handleState = { stateHandled = true },
+        )
     }
 }

@@ -54,6 +54,11 @@ interface TripStorage : Closeable {
     val errors: Flow<Throwable>
         get() = emptyFlow()
 
+    /**
+     * 作者：long
+     *
+     * 发出最近一次成功落盘的活动行程边界；实现应允许稍晚连接的 Service/Activity 读取最新值。
+     */
     val confirmedCheckpoints: Flow<ActiveTripCheckpoint>
         get() = emptyFlow()
 

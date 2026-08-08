@@ -261,8 +261,19 @@ class DashboardRuntime(
         tripEvents.tryDispatch(TripSessionCommand.End(nowMillis))
     }
 
-    fun checkpointTripWrites() {
-        tripEvents.tryDispatch(TripSessionCommand.Checkpoint)
+    /**
+     * 作者：long
+     *
+     * 等待活动行程尾批完成后返回最终仪表状态，供 Service 任务移除和正常销毁路径使用。
+     */
+    suspend fun checkpointTripWritesAndAwait(): DashboardState {
+        if (!_state.value.storageReady || sessionCoordinator.state.value.mode == TripMode.IDLE) {
+            publishSessionState(sessionCoordinator.state.value)
+            return _state.value
+        }
+        // 作者：long｜任务被移除后由 Service 在协程中等待尾批确认，成功或失败都要让调用方看到最终存储状态。
+        tripEvents.dispatchAndAwait(TripSessionCommand.Checkpoint)
+        return _state.value
     }
 
     fun toggleTheme() = update { copy(darkTheme = !darkTheme) }

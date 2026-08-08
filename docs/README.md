@@ -7,7 +7,7 @@
 - [产品规格](./product-spec.md)：单屏无滚动信息层级、交互、布局和安装边界。
 - [技术设计](./technical-design.md)：定位前台服务、共享运行时、行程确认、持久化和 Pixel_9 测试重点。
 - [测试与性能基线](./testing.md)：本地、Pixel_9、Baseline Profile 与 Macrobenchmark 命令及当前基线。
-- [剩余高风险迁移项](./migration-risks.md)：M1-M7 落地证据、API 27/29 正式旧包升级、跨 API 完整权限矩阵、API 27/29/35 30 分钟回归和 API 27 整机重启边界结论，以及低存储、尾批、最终候选、真机长测、开机自动恢复评审和 AGP 9 的剩余顺序与验收门槛。
+- [剩余高风险迁移项](./migration-risks.md)：M1-M7 落地证据、本轮存储与生命周期 seam 复验、API 27/29 正式旧包升级、跨 API 完整权限矩阵、API 27/29/35 30 分钟回归和 API 27 整机重启边界结论，以及低存储、尾批、真实 Service 异常竞态、最终候选、真机长测、开机自动恢复评审和 AGP 9 的剩余顺序与验收门槛。
 - [ADR-0001](./adr/0001-use-platform-locationmanager.md)：拆分基线继续采用系统 `LocationManager`，后续架构升级由手机版独立验证。
 
 ## 发布记录

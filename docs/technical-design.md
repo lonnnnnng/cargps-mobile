@@ -83,7 +83,7 @@ flowchart LR
 - Service 使用常驻低优先级通知，提供返回应用和结束行程的显式不可变 `PendingIntent`；通知按模式、每 10 米或最多每 5 秒刷新，避免每秒重建 SystemUI 视图。
 - Manifest 已声明 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_LOCATION` 和 `android:foregroundServiceType="location"`；Activity 与 Service 在启动、恢复和系统状态变化时使用统一 `TripAccessState` 检查精确位置、GPS Provider 和 API 33+ 通知权限。
 - API 27 不需要 `ACCESS_BACKGROUND_LOCATION`，该权限从 API 29 才出现。当前 M2 不申请后台位置；只有未来确需从后台创建定位服务时才单独评审该权限和系统豁免。
-- M2 核心实现及 Pixel_9 / API 35、API 27、API 29、API 31 聚焦短路径已验证；API 31 已补充锁屏保持和活动行程撤权后的受阻结束路径，API 27/API 29 还完成了活动行程覆盖升级后的前台服务恢复。Pixel_9 / API 35、Android 10 / API 29 和 Android 8.1 / API 27 已分别完成 41 个样本、1831/1816/1816 秒的 Home、系统设置、锁屏睡眠和解锁返回回归，期间单进程、前台服务、通知和单定位线程持续，结束后资源清理。API 27 整机重启边界也已验证：活动行程数据保留，但系统不自动启动 Service；用户打开应用后由 Room 恢复并重新建立定位。常规跨 API 后台门禁已完成，低存储、尾批损失和真实道路长测仍未完成。
+- M2 核心实现及 Pixel_9 / API 35、API 27、API 29、API 31 聚焦短路径已验证；API 31 已补充锁屏保持和活动行程撤权后的受阻结束路径，API 27/API 29 还完成了活动行程覆盖升级后的前台服务恢复。Pixel_9 / API 35、Android 10 / API 29 和 Android 8.1 / API 27 已分别完成 41 个样本、1831/1816/1816 秒的 Home、系统设置、锁屏睡眠和解锁返回回归，期间单进程、前台服务、通知和单定位线程持续，结束后资源清理。API 27 整机重启边界也已验证：活动行程数据保留，但系统不自动启动 Service；用户打开应用后由 Room 恢复并重新建立定位。常规跨 API 后台门禁已完成，本轮又补充了点写失败统一失败流、确认边界 replay 和任务移除等待 seam；完整本地构建与 Pixel_9 的 `gps-core` 12/12、手机版 6/6 instrumentation 已复验。低存储量化、真实 Service 全路径和真实道路长测仍未完成。
 - 系统以 `START_STICKY` 重建 Service 时先升为“正在确认行程存储”前台状态，并等待 `DashboardRuntime.awaitInitialRestore()`；只有恢复完成且存在活动行程时才重启定位，没有活动行程或恢复失败后才停止 Service。
 - 权限请求历史只用于区分首次请求与后续拒绝；Activity 在权限回调、设置返回、`onResume()` 和 Provider 广播后重新读取系统状态。设置返回不自动开始行程，活动行程受阻时停止定位并保留用户结束行程的入口。
 - 整机重启不属于当前 `START_STICKY` 恢复承诺：API 27 实测重启后没有手机版进程、Service、通知或 GPS 注册，打开应用后才显示“已恢复”。当前 Manifest 不注册 `BOOT_COMPLETED`，也不申请 `ACCESS_BACKGROUND_LOCATION`；若未来要求开机自动继续，必须先评审后台位置权限、Android 14 while-in-use 规则、Android 15 `BOOT_COMPLETED` 限制和 Play 政策，再决定是否新增 receiver。
@@ -93,8 +93,8 @@ flowchart LR
 - 生产装配使用 Room 2.8.4 管理本地 SQLite，schema 当前为 v4；`TripStorage` 隔离数据库实现，领域与 UI 不依赖 Room 类型。`SqliteTripStorage` 只保留为旧 schema fixture 构造和兼容性验证工具。
 - Room 注册显式 `1 -> 2`、`2 -> 3`、`3 -> 4` 迁移并导出 v4 schema，不启用 destructive fallback。v4 规范化旧表以建立 Room schema identity，但不改变统计口径或历史数据。
 - 数据库写入统一进入单线程后台队列；`TripSessionEventQueue` 固定先恢复，并按 FIFO 串行交付 Start、AppendPoint、Pause、Resume、End、Tick 和 Checkpoint，`TripSessionCoordinator` 负责历史查询和元数据确认。等待型 Start 在确认后同步发布 `DashboardState`；队列关闭或异常会唤醒等待者并拒绝新事件。阻塞式存储调用切到 `Dispatchers.IO`，定位点由存储队列在后台批量落库；读取屏障只观察它之前已经入队的写入。
-- 有效点按最多 16 点或 1 秒组成批次，在单个事务中写入；暂停、结束、读取、已执行的生命周期检查点和正常关闭前强制冲刷尾批次。`onTaskRemoved()` 只异步请求检查点，系统可能在请求完成前直接回收进程，异常退出仍存在最多约 1 秒的未确认点窗口。
-- `ActiveTripCheckpoint` 表达数据库确认边界：行程开始时间、确认点数、最后 `sequence` 和最后点时间。队列每次批量事务成功后发布该检查点，`TripSessionCoordinator` 将其映射到 `DashboardRuntime`；未冲刷点只能更新实时统计，不能进入确认边界。
+- 有效点按最多 16 点或 1 秒组成批次，在单个事务中写入；暂停、结束、读取、已执行的生命周期检查点和正常关闭前强制冲刷尾批次。`TripRecordingService.onTaskRemoved()` 在 Service 协程中调用 `DashboardRuntime.checkpointTripWritesAndAwait()`，不阻塞主线程但仍不能阻止系统在协程完成前回收进程，异常退出仍存在最多约 1 秒的未确认点窗口。
+- `ActiveTripCheckpoint` 表达数据库确认边界：行程开始时间、确认点数、最后 `sequence` 和最后点时间。队列每次批量事务成功后发布该检查点，并保留最近一条供晚到的 Service/Activity 订阅者读取；`TripSessionCoordinator` 将其映射到 `DashboardRuntime`，写入恢复后清除过期错误。未冲刷点只能更新实时统计，不能进入确认边界。
 - 活动行程元数据在开始、暂停和恢复时排队写入；协调器等待写入屏障成功后才发布新模式。历史列表使用结束时间索引。
 - `ActiveTripLoadResult` 显式区分 `Empty`、`Loaded` 和 `Corrupt`。无法识别活动行程 mode 时保留原始行，协调器关闭存储门禁并拒绝开始新行程；迁移失败依赖事务回滚保留原数据库，禁止自动清库。
 - 结束行程在同一事务中先写入已结束统计并迁移活动轨迹点，再清除活动行程；中途失败时优先保留完整可恢复数据。
@@ -133,6 +133,6 @@ flowchart LR
 
 ## 10. 后续迁移边界
 
-M5 跨 API 权限验收已经完成，三档 API 的 30 分钟后台回归和 API 27 整机重启边界也已通过。剩余工作集中在低存储、尾批损失、事件顺序与异常恢复、最终候选升级链和真机证据；开机自动恢复属于尚未承诺的独立产品决策，不能只添加 receiver 解决，也不能把这些问题收缩成单一“权限补丁”或“升版本”。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
+M5 跨 API 权限验收已经完成，三档 API 的 30 分钟后台回归和 API 27 整机重启边界也已通过。本轮又补充了点写失败统一失败流、确认边界 replay、任务移除等待和 Start 请求清理顺序，并通过完整本地构建和 Pixel_9 18 项 instrumentation 复验。剩余工作集中在低存储量化、真实 Service 全路径异常竞态、尾批损失、最终候选升级链和真机证据；开机自动恢复属于尚未承诺的独立产品决策，不能只添加 receiver 解决，也不能把这些问题收缩成单一“权限补丁”或“升版本”。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
 
-M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，并验证 API 27 整机重启后需用户打开应用恢复；M4 已完成 Room schema v4、旧版本显式迁移、损坏状态护栏，以及 API 27/API 29 的公开正式旧包覆盖升级。M5 已通过 Pixel_9 / API 35 和 API 27/29/31/33 的完整位置权限矩阵，API 33 通知拒绝矩阵也已验收；M6 单一事件队列已通过本地与跨 API 聚焦短路径，三档 API 还通过了完整 30 分钟后台回归。下一步集中完成低存储、尾批损失量化、最终候选提升版本号后的覆盖升级复验，以及取得单独授权后的真实设备 2 小时长测；若产品决定支持开机自动恢复，另开迁移项评审 `BOOT_COMPLETED` 与后台位置权限；M7 性能资产保持当前基线，M8 AGP 9 继续独立延后。
+M1 已建立可确认的行程状态，并补充同步点写失败不终止会话的失败流；M2 已把定位所有权迁入前台服务；M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，确认边界支持晚到订阅者读取，任务移除路径可等待尾批确认，并验证 API 27 整机重启后需用户打开应用恢复；M4 已完成 Room schema v4、旧版本显式迁移、损坏状态护栏，以及 API 27/API 29 的公开正式旧包覆盖升级。M5 已通过 Pixel_9 / API 35 和 API 27/29/31/33 的完整位置权限矩阵，API 33 通知拒绝矩阵也已验收；M6 单一事件队列已通过本地与跨 API 聚焦短路径，三档 API 还通过了完整 30 分钟后台回归。下一步集中完成低存储量化、真实 Service 全路径异常竞态、尾批损失、最终候选提升版本号后的覆盖升级复验，以及取得单独授权后的真实设备 2 小时长测；若产品决定支持开机自动恢复，另开迁移项评审 `BOOT_COMPLETED` 与后台位置权限；M7 性能资产保持当前基线，M8 AGP 9 继续独立延后。

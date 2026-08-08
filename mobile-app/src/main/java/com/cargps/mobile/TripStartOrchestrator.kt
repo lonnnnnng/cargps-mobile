@@ -18,12 +18,18 @@ internal suspend fun completeTripStart(
 ) {
     val startedState = try {
         awaitStart(requestedAtMillis)
+    } catch (error: Throwable) {
+        // 作者：long｜存储确认异常时仍需清除请求中标记，否则 Service 会永久停留在恢复通知状态。
+        onRequestFinished()
+        throw error
+    }
+    try {
+        if (startedState.tripMode != TripMode.IDLE && currentAccess().isReady) {
+            startLocation()
+        }
+        // 作者：long｜先发布最终状态再清除请求标记，避免状态收集器在 IDLE 快照下误回收仍在确认的 Service。
+        handleState(startedState)
     } finally {
-        // 作者：long｜即使存储确认被取消或异常终止，也要清除请求中标记，让 Service 能退出恢复通知状态。
         onRequestFinished()
     }
-    if (startedState.tripMode != TripMode.IDLE && currentAccess().isReady) {
-        startLocation()
-    }
-    handleState(startedState)
 }

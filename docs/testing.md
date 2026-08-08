@@ -2,7 +2,7 @@
 
 作者：long
 
-更新日期：2026-08-08 10:36:54（北京时间，UTC+8）
+更新日期：2026-08-08 11:41:04（北京时间，UTC+8）
 
 ## 测试分层
 
@@ -16,9 +16,9 @@
 
 生产存储为 `RoomTripStorage`；`SqliteTripStorage` 只用于旧 schema fixture 和 adapter 兼容测试。Room v4 schema 导出到 `gps-core/schemas/com.cargps.storage.RoomTripDatabase/4.json`，所有旧版本迁移均显式注册，禁止 destructive fallback。
 
-`TripSessionCoordinatorTest` 通过 fake storage 注入开始、暂停、恢复、结束和异步写入错误，验证元数据命令失败时保持上一个确认模式、重复命令不重复写、多段暂停只扣除真实暂停时长。`QueuedTripStorageTest` 另外验证瞬时批量失败重试成功不误报、连续失败由屏障抛出，以及元数据失败可被确认屏障捕获；轨迹实时统计与最后确认检查点按不同边界断言。
+`TripSessionCoordinatorTest` 通过 fake storage 注入开始、暂停、恢复、结束、定位点同步写入失败和异步写入错误，验证元数据命令失败时保持上一个确认模式、点写失败不终止会话、恢复确认后清除临时错误、重复命令不重复写、多段暂停只扣除真实暂停时长。`QueuedTripStorageTest` 另外验证瞬时批量失败重试成功不误报、连续失败由屏障抛出、晚到订阅者仍可取得最近确认检查点，以及元数据失败可被确认屏障捕获；轨迹实时统计与最后确认检查点按不同边界断言。
 
-M6 当前开发线的 `TripSessionEventQueueTest` 5/5，覆盖 Restore 固定优先与完整 FIFO、等待型 Start、关闭取消、actor 异常终止和消费时连续 Toggle。协调器测试补充 End 前尾点纳入、End 后点拒绝；Runtime 测试确认等待型 Start 返回前已经同步发布记录状态。手机版 `TripStartOrchestratorTest` 4/4，覆盖纯编排回调在确认前不调用 `startLocation`、Start 失败、权限等待期间失效和异常清理；`LocationEnginePolicyTest` 5/5 覆盖不可见 Start 等待、可见空闲/等待预览、不可见活动行程和定位权限阻断。
+M6 当前开发线的 `TripSessionEventQueueTest` 5/5，覆盖 Restore 固定优先与完整 FIFO、等待型 Start、关闭取消、actor 异常终止和消费时连续 Toggle。协调器测试补充 End 前尾点纳入、End 后点拒绝、点写失败统一失败流和确认恢复；Runtime 测试确认等待型 Start 返回前已经同步发布记录状态，并确认任务移除检查点在存储确认后才返回。手机版 `TripStartOrchestratorTest` 5/5，覆盖纯编排回调在确认前不调用 `startLocation`、最终状态先于请求标记清理、Start 失败、权限等待期间失效和异常清理；`LocationEnginePolicyTest` 5/5 覆盖不可见 Start 等待、可见空闲/等待预览、不可见活动行程和定位权限阻断。
 
 ## 本地关卡
 
@@ -103,7 +103,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 系统 `ApplicationExitInfo` 记录 `reason=SIGNALED`、`status=9`，随后自动创建新 PID `9355`，`restartCount=1`；未手工启动 Service。
 - 新进程恢复为 `START_STICKY`、`isForeground=true`、类型 `0x00000008`，通知仍为“CarGPS · 正在记录”，定位线程仍为 1；Activity 回前台显示“记录中 / 已恢复”。
 - 从 UI 结束行程后通知与 Service 清除，界面回到空闲，crash buffer 为空。证据为 `artifacts/cargps-mobile-m3-after-sigkill.png` 和 `.xml`。
-- 该结果证明普通进程信号终止后的确认边界恢复，不证明 `onTaskRemoved()` 异步检查点必然完成，也不证明 `force-stop`、断电或未确认内存尾批零丢失；API 27/API 29 后续已完成同类聚焦恢复，低存储和尾批损失量化仍待验收，整机重启另按下一节验证。
+- 该结果证明普通进程信号终止后的确认边界恢复，不证明 `onTaskRemoved()` 检查点协程必然在回收前完成，也不证明 `force-stop`、断电或未确认内存尾批零丢失；API 27/API 29 后续已完成同类聚焦恢复，低存储和尾批损失量化仍待验收，整机重启另按下一节验证。
 
 ## M3 整机重启边界回归
 
@@ -135,12 +135,22 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - API 27/29/31/33 已完成适用的精确/近似、首次/永久拒绝、应用设置返回和系统定位关闭/恢复；API 33 还保留通知首次/永久拒绝证据。结合 Pixel_9 / API 35，跨版本权限矩阵已经闭环。
 - API 27 的通用 Compose 测试宿主原本按 1024x600 横屏运行，未继承 `MainActivity` 的竖屏声明，导致两个底部权限入口可见性断言失败。测试现使用 UiAutomator 固定竖屏并在结束后解冻；从横屏 `SurfaceOrientation: 0` 启动后手机版 6/6 通过，API 29/33 也各复验 6/6，断言没有降级。
 
+## 2026-08-08 P0/P1 seam 加固
+
+- 本地 JVM 完整测试：`gps-core` 48/48、`mobile-app` 25/25 通过。
+- 本地完整构建关卡：AndroidTest 编译、`lintDebug`、`lintVitalRelease`、Debug/Release、R8、资源压缩和 `baselineprofile:assembleBenchmarkRelease` 全部成功；Gradle 汇总为 `BUILD SUCCESSFUL`，271 项任务中 57 项执行、214 项复用缓存。
+- Pixel_9 复验：先确认 `emulator-5554` 的 `ro.boot.qemu.avd_name = Pixel_9`，再显式设置 `ANDROID_SERIAL=emulator-5554`；`gps-core` 12/12、`mobile-app` 6/6 instrumentation 通过。该关卡验证现有设备测试未回退，不替代低存储注入或真实 Service 全路径异常竞态测试。
+- 低存储恢复边界：同步定位点写入失败进入 `TripPersistenceState.FAILED`，保持 `RECORDING` 和最后确认统计；新的确认检查点到达后恢复 `CONFIRMED` 并清除过期错误。
+- 确认边界重绑：`QueuedTripStorage.confirmedCheckpoints` 保留最近一条成功确认值，晚到的 Service/Activity 订阅者仍可取得最后 `sequence` 和时间。
+- 任务移除边界：`DashboardRuntime.checkpointTripWritesAndAwait()` 等待尾批检查点完成后才返回；`TripRecordingService.onTaskRemoved()` 在 Service 协程中调用，不阻塞主线程，但系统仍可能在协程完成前回收进程。
+- Start 竞态：最终状态处理移到 `startRequested` 清理之前，避免状态收集器看到旧 `IDLE` 快照而误回收正在确认的 Service。
+
 ## M6 单一事件队列回归
 
 - 当前开发线已加入唯一 `Channel.UNLIMITED` 事件队列，固定先 Restore，再串行处理 Start、AppendPoint、Pause、Resume、End、Tick 和 Checkpoint；关闭或 actor 异常后不会留下悬挂等待者或继续假接收事件。
 - `DashboardRuntime.startTripAndAwait()` 在存储确认后同步发布并返回 `DashboardState`；`LocationEnginePolicy` 只允许已确认活动行程在客户端不可见时启动后台定位，`START_PENDING` 不再等价于活动行程。客户端可见时仍允许定位预览，Runtime 在 `IDLE` 状态不会写入行程点。
-- 本地完整关卡通过：`gps-core` 44/44、手机版 24/24 JVM；AndroidTest 编译、`lintDebug`、`lintVitalRelease`、Debug/Release、R8、资源压缩和 `baselineprofile:assembleBenchmarkRelease` 均成功。
-- Pixel_9 / API 35 instrumentation：`gps-core` 12/12、手机版 6/6。设备由 `emulator-5554` 的 `ro.boot.qemu.avd_name = Pixel_9` 明确确认。
+- 本地完整关卡此前为 `gps-core` 44/44、手机版 24/24 JVM；本轮 seam 加固后 `gps-core` 48/48、手机版 25/25 JVM，AndroidTest 编译、`lintDebug`、`lintVitalRelease`、Debug/Release、R8、资源压缩和 `baselineprofile:assembleBenchmarkRelease` 均成功。
+- Pixel_9 / API 35 instrumentation：本轮重新执行后 `gps-core` 12/12、手机版 6/6。设备由 `emulator-5554` 的 `ro.boot.qemu.avd_name = Pixel_9` 明确确认，所有 Gradle 设备任务通过 `ANDROID_SERIAL` 锁定，未操作 Redmi。
 - Pixel_9 运行时短路径：开始后 UI 为“记录中”，Service 为 `location` 前台类型；以应用 UID 连续两次 ensure 后 `cargps-location` 线程仍为 1；结束后回到“等待开始”且历史增加一段，Home 后 Service 清除，crash buffer 无 CarGPS 记录。
 - API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的完整 30 分钟 Home/切换应用/锁屏已通过；API 27 整机重启边界也已验证为“不开机自动拉起，打开应用后恢复”。低存储、尾批损失量化和真实设备 2 小时长测仍未完成。
 - API 31 已完成可见开始、`location` 前台服务、Home、锁屏、单定位线程、活动行程撤权阻断和结束后 Home 清理短路径；它仍不计作 30 分钟长测。

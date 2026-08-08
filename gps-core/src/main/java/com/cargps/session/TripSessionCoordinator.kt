@@ -98,7 +98,12 @@ class TripSessionCoordinator(
         storage.confirmedCheckpoints.collect { checkpoint ->
             commandMutex.withLock {
                 if (checkpoint.startedAtMillis == tripStartedAtMillis && mutableState.value.mode != TripMode.IDLE) {
-                    mutableState.value = mutableState.value.copy(confirmedCheckpoint = checkpoint)
+                    // 作者：long｜低存储等瞬时写入失败恢复后，新的数据库确认边界代表磁盘已重新可写，界面不能继续显示过期错误。
+                    mutableState.value = mutableState.value.copy(
+                        confirmedCheckpoint = checkpoint,
+                        persistence = TripPersistenceState.CONFIRMED,
+                        storageError = null,
+                    )
                 }
             }
         }
@@ -275,10 +280,17 @@ class TripSessionCoordinator(
             return TripSessionResult.Rejected("当前行程不接收定位点", current)
         }
 
-        storage.appendPoint(point)
-        accumulator.append(point)
-        mutableState.value = current.copy(stats = snapshot(point.timestampMillis))
-        return TripSessionResult.Accepted(mutableState.value)
+        return try {
+            storage.appendPoint(point)
+            accumulator.append(point)
+            mutableState.value = current.copy(stats = snapshot(point.timestampMillis))
+            TripSessionResult.Accepted(mutableState.value)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            // 作者：long｜定位点同步写入失败时保留最后确认的累计状态，统一反馈存储异常，避免事件 actor 因单个坏点永久退出。
+            TripSessionResult.Failed(error, publishFailure(error, keepReady = true))
+        }
     }
 
     private fun tick(atMillis: Long): TripSessionResult {

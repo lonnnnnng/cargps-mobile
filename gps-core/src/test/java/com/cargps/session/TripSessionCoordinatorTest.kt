@@ -128,6 +128,32 @@ class TripSessionCoordinatorTest {
     }
 
     @Test
+    fun `定位点同步写入失败进入统一失败流且会话仍可继续处理`() = runTest {
+        val expected = IllegalStateException("append failed")
+        val storage = FakeTripStorage(failingOperation = "append", failure = expected)
+        val coordinator = coordinator(storage)
+        coordinator.dispatch(TripSessionCommand.Restore)
+        coordinator.dispatch(TripSessionCommand.Start(1_000L))
+
+        val failed = coordinator.dispatch(
+            TripSessionCommand.AppendPoint(TripPoint(2_000L, 4.0, 12.0, true)),
+        )
+
+        assertTrue(failed is TripSessionResult.Failed)
+        assertEquals(expected, (failed as TripSessionResult.Failed).error)
+        assertEquals(TripMode.RECORDING, failed.state.mode)
+        assertEquals(TripPersistenceState.FAILED, failed.state.persistence)
+        assertEquals("append failed", failed.state.storageError)
+        assertEquals(0.0, failed.state.stats.distanceMeters, 0.001)
+
+        storage.failingOperation = null
+        val tick = coordinator.dispatch(TripSessionCommand.Tick(3_000L))
+        assertTrue(tick is TripSessionResult.Accepted)
+        assertEquals(TripMode.RECORDING, tick.state.mode)
+        coordinator.close()
+    }
+
+    @Test
     fun `重复会话命令不会产生重复存储写入`() = runTest {
         val storage = FakeTripStorage()
         val coordinator = coordinator(storage)
@@ -207,6 +233,27 @@ class TripSessionCoordinatorTest {
         assertEquals(TripPersistenceState.FAILED, coordinator.state.value.persistence)
         assertEquals("async failure", coordinator.state.value.storageError)
         assertTrue(coordinator.state.value.storageReady)
+        coordinator.close()
+    }
+
+    @Test
+    fun `存储恢复并确认新批次后清除临时失败状态`() = runTest {
+        val storage = FakeTripStorage()
+        val coordinator = coordinator(storage)
+        coordinator.dispatch(TripSessionCommand.Restore)
+        coordinator.dispatch(TripSessionCommand.Start(1_000L))
+        runCurrent()
+
+        storage.emitError(IllegalStateException("disk full"))
+        runCurrent()
+
+        val checkpoint = ActiveTripCheckpoint(1_000L, 1L, 9L, 2_000L)
+        storage.emitCheckpoint(checkpoint)
+        runCurrent()
+
+        assertEquals(TripPersistenceState.CONFIRMED, coordinator.state.value.persistence)
+        assertEquals(null, coordinator.state.value.storageError)
+        assertEquals(checkpoint, coordinator.state.value.confirmedCheckpoint)
         coordinator.close()
     }
 
