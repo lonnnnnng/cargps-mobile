@@ -83,9 +83,10 @@ flowchart LR
 - Service 使用常驻低优先级通知，提供返回应用和结束行程的显式不可变 `PendingIntent`；通知按模式、每 10 米或最多每 5 秒刷新，避免每秒重建 SystemUI 视图。
 - Manifest 已声明 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_LOCATION` 和 `android:foregroundServiceType="location"`；Activity 与 Service 在启动、恢复和系统状态变化时使用统一 `TripAccessState` 检查精确位置、GPS Provider 和 API 33+ 通知权限。
 - API 27 不需要 `ACCESS_BACKGROUND_LOCATION`，该权限从 API 29 才出现。当前 M2 不申请后台位置；只有未来确需从后台创建定位服务时才单独评审该权限和系统豁免。
-- M2 核心实现及 Pixel_9 / API 35、API 27、API 29、API 31 聚焦短路径已验证；API 31 已补充锁屏保持和活动行程撤权后的受阻结束路径，API 27/API 29 还完成了活动行程覆盖升级后的前台服务恢复。Pixel_9 / API 35、Android 10 / API 29 和 Android 8.1 / API 27 已分别完成 41 个样本、1831/1816/1816 秒的 Home、系统设置、锁屏睡眠和解锁返回回归，期间单进程、前台服务、通知和单定位线程持续，结束后资源清理。常规跨 API 后台门禁已完成，设备重启、低存储、尾批损失和真实道路长测仍未完成。
+- M2 核心实现及 Pixel_9 / API 35、API 27、API 29、API 31 聚焦短路径已验证；API 31 已补充锁屏保持和活动行程撤权后的受阻结束路径，API 27/API 29 还完成了活动行程覆盖升级后的前台服务恢复。Pixel_9 / API 35、Android 10 / API 29 和 Android 8.1 / API 27 已分别完成 41 个样本、1831/1816/1816 秒的 Home、系统设置、锁屏睡眠和解锁返回回归，期间单进程、前台服务、通知和单定位线程持续，结束后资源清理。API 27 整机重启边界也已验证：活动行程数据保留，但系统不自动启动 Service；用户打开应用后由 Room 恢复并重新建立定位。常规跨 API 后台门禁已完成，低存储、尾批损失和真实道路长测仍未完成。
 - 系统以 `START_STICKY` 重建 Service 时先升为“正在确认行程存储”前台状态，并等待 `DashboardRuntime.awaitInitialRestore()`；只有恢复完成且存在活动行程时才重启定位，没有活动行程或恢复失败后才停止 Service。
 - 权限请求历史只用于区分首次请求与后续拒绝；Activity 在权限回调、设置返回、`onResume()` 和 Provider 广播后重新读取系统状态。设置返回不自动开始行程，活动行程受阻时停止定位并保留用户结束行程的入口。
+- 整机重启不属于当前 `START_STICKY` 恢复承诺：API 27 实测重启后没有手机版进程、Service、通知或 GPS 注册，打开应用后才显示“已恢复”。当前 Manifest 不注册 `BOOT_COMPLETED`，也不申请 `ACCESS_BACKGROUND_LOCATION`；若未来要求开机自动继续，必须先评审后台位置权限、Android 14 while-in-use 规则、Android 15 `BOOT_COMPLETED` 限制和 Play 政策，再决定是否新增 receiver。
 
 ## 7. 持久化实现
 
@@ -122,11 +123,16 @@ flowchart LR
 - [后台定位](https://developer.android.com/develop/sensors-and-location/location/background)：Android 8.0 及以上后台应用的位置更新会被限制为每小时少量次数。
 - [Android 14 前台服务类型](https://developer.android.com/about/versions/14/changes/fgs-types-required)：定位服务需声明 `location` 类型和 `FOREGROUND_SERVICE_LOCATION`，并在启动前满足位置权限条件。
 - [启动前台服务](https://developer.android.com/develop/background-work/services/fgs/launch)：Android 12 起限制后台启动；Android 14 起会核验服务类型对应权限。
+- [后台启动前台服务限制](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)：Android 14+ 对需要 while-in-use 位置权限的服务有后台创建限制；location 服务要在后台持续访问位置时需单独评估 `ACCESS_BACKGROUND_LOCATION`。
+- [Android 15 行为变化](https://developer.android.com/about/versions/15/behavior-changes-15)：`BOOT_COMPLETED` 接收器启动部分前台服务类型受到新增限制；该例外不等于自动获得后台位置访问能力。
+- [location 前台服务类型](https://developer.android.com/develop/background-work/services/fgs/service-types#location)：location 类型的服务前提包括位置服务开启和运行时位置权限。
+- [后台位置访问](https://developer.android.com/develop/sensors-and-location/location/background)：Android 8.0+ 对后台位置更新有限制，后台位置权限应只在核心功能确有需要时申请。
+- [后台优化](https://developer.android.com/topic/performance/background-optimization)：目标 API 33+ 的受限应用可能延迟收到 `BOOT_COMPLETED`/`LOCKED_BOOT_COMPLETED`，开机恢复不能只验证 AOSP 默认电源策略。
 
-定位基础 API 依据于 2026-08-05 核验，近似位置升级和前台服务规则于 2026-08-07 重新抓取 Android Developers 正文确认。不同手机 GNSS 驱动是否实际输出全部 NMEA 语句，仍需在目标设备上验证。
+定位基础 API 依据于 2026-08-05 核验，近似位置升级和前台服务规则于 2026-08-07 重新抓取 Android Developers 正文确认；开机恢复和后台位置限制于 2026-08-08 重新抓取并与 API 27 实机重启边界对照。不同手机 GNSS 驱动是否实际输出全部 NMEA 语句，仍需在目标设备上验证。
 
 ## 10. 后续迁移边界
 
-M5 跨 API 权限验收已经完成，三档 API 的 30 分钟后台回归也已通过。剩余工作集中在设备重启、低存储、尾批损失、事件顺序与异常恢复、最终候选升级链和真机证据，不能再把这些问题收缩成单一“权限补丁”或“升版本”。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
+M5 跨 API 权限验收已经完成，三档 API 的 30 分钟后台回归和 API 27 整机重启边界也已通过。剩余工作集中在低存储、尾批损失、事件顺序与异常恢复、最终候选升级链和真机证据；开机自动恢复属于尚未承诺的独立产品决策，不能只添加 receiver 解决，也不能把这些问题收缩成单一“权限补丁”或“升版本”。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
 
-M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，M4 已完成 Room schema v4、旧版本显式迁移、损坏状态护栏，以及 API 27/API 29 的公开正式旧包覆盖升级。M5 已通过 Pixel_9 / API 35 和 API 27/29/31/33 的完整位置权限矩阵，API 33 通知拒绝矩阵也已验收；M6 单一事件队列已通过本地与跨 API 聚焦短路径，三档 API 还通过了完整 30 分钟后台回归。下一步集中完成设备重启、低存储、尾批损失量化、最终候选提升版本号后的覆盖升级复验，以及取得单独授权后的真实设备 2 小时长测；M7 性能资产保持当前基线，M8 AGP 9 继续独立延后。
+M1 已建立可确认的行程状态，M2 已把定位所有权迁入前台服务，M3 已建立最后确认检查点和 `START_STICKY` 恢复门禁，并验证 API 27 整机重启后需用户打开应用恢复；M4 已完成 Room schema v4、旧版本显式迁移、损坏状态护栏，以及 API 27/API 29 的公开正式旧包覆盖升级。M5 已通过 Pixel_9 / API 35 和 API 27/29/31/33 的完整位置权限矩阵，API 33 通知拒绝矩阵也已验收；M6 单一事件队列已通过本地与跨 API 聚焦短路径，三档 API 还通过了完整 30 分钟后台回归。下一步集中完成低存储、尾批损失量化、最终候选提升版本号后的覆盖升级复验，以及取得单独授权后的真实设备 2 小时长测；若产品决定支持开机自动恢复，另开迁移项评审 `BOOT_COMPLETED` 与后台位置权限；M7 性能资产保持当前基线，M8 AGP 9 继续独立延后。

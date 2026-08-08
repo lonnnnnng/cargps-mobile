@@ -2,7 +2,7 @@
 
 作者：long
 
-更新日期：2026-08-08 10:15:11（北京时间，UTC+8）
+更新日期：2026-08-08 10:36:54（北京时间，UTC+8）
 
 ## 测试分层
 
@@ -103,7 +103,16 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 系统 `ApplicationExitInfo` 记录 `reason=SIGNALED`、`status=9`，随后自动创建新 PID `9355`，`restartCount=1`；未手工启动 Service。
 - 新进程恢复为 `START_STICKY`、`isForeground=true`、类型 `0x00000008`，通知仍为“CarGPS · 正在记录”，定位线程仍为 1；Activity 回前台显示“记录中 / 已恢复”。
 - 从 UI 结束行程后通知与 Service 清除，界面回到空闲，crash buffer 为空。证据为 `artifacts/cargps-mobile-m3-after-sigkill.png` 和 `.xml`。
-- 该结果证明普通进程信号终止后的确认边界恢复，不证明 `onTaskRemoved()` 异步检查点必然完成，也不证明 `force-stop`、断电或未确认内存尾批零丢失；API 27/API 29 后续已完成同类聚焦恢复，设备重启、低存储和尾批损失量化仍待验收。
+- 该结果证明普通进程信号终止后的确认边界恢复，不证明 `onTaskRemoved()` 异步检查点必然完成，也不证明 `force-stop`、断电或未确认内存尾批零丢失；API 27/API 29 后续已完成同类聚焦恢复，低存储和尾批损失量化仍待验收，整机重启另按下一节验证。
+
+## M3 整机重启边界回归
+
+- API 27 / `emulator-5556` 以活动行程 `RECORDING` 为前置条件执行普通 `adb -s emulator-5556 reboot`，不清数据、不使用 `force-stop`。
+- 重启前数据库 `active_trip` 存在，观察到 `active_point` 为 118 个（sequence `2004..2121`），`TripRecordingService` 为 `location` 前台服务，GPS 注册为 1 条。
+- `sys.boot_completed=1` 后、未打开应用前，`com.cargps.mobile` 进程、Service、手机版通知和 GPS 注册均不存在；`active_trip` 仍为 `RECORDING`。重启过程中的最终异步冲刷使点数现场观察为 171 个（`2004..2174`），不据此计算尾批损失率。
+- 手动打开 `MainActivity` 后 UI 显示“记录中 / 已恢复”，Service 和 GPS 注册恢复；确认结束后活动行程、通知和定位注册清理。
+- 结论：当前产品边界是“整机重启后数据保留，用户打开应用后恢复”，不承诺开机自动继续记录。详细摘要见 `artifacts/cargps-mobile-api27-reboot-summary.md`。
+- 若未来要做开机自动恢复，必须新增独立验证：`BOOT_COMPLETED`/`LOCKED_BOOT_COMPLETED`、Android 14 while-in-use location、`ACCESS_BACKGROUND_LOCATION`、Android 15 启动限制、受限应用和厂商电源管理；不能把普通 `START_STICKY` 结果外推为开机恢复。
 
 ## M4 Room 与数据损坏回归
 
@@ -133,7 +142,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 本地完整关卡通过：`gps-core` 44/44、手机版 24/24 JVM；AndroidTest 编译、`lintDebug`、`lintVitalRelease`、Debug/Release、R8、资源压缩和 `baselineprofile:assembleBenchmarkRelease` 均成功。
 - Pixel_9 / API 35 instrumentation：`gps-core` 12/12、手机版 6/6。设备由 `emulator-5554` 的 `ro.boot.qemu.avd_name = Pixel_9` 明确确认。
 - Pixel_9 运行时短路径：开始后 UI 为“记录中”，Service 为 `location` 前台类型；以应用 UID 连续两次 ensure 后 `cargps-location` 线程仍为 1；结束后回到“等待开始”且历史增加一段，Home 后 Service 清除，crash buffer 无 CarGPS 记录。
-- API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的完整 30 分钟 Home/切换应用/锁屏已通过。设备重启/低存储、尾批损失量化和真实设备 2 小时长测仍未完成。
+- API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的完整 30 分钟 Home/切换应用/锁屏已通过；API 27 整机重启边界也已验证为“不开机自动拉起，打开应用后恢复”。低存储、尾批损失量化和真实设备 2 小时长测仍未完成。
 - API 31 已完成可见开始、`location` 前台服务、Home、锁屏、单定位线程、活动行程撤权阻断和结束后 Home 清理短路径；它仍不计作 30 分钟长测。
 
 ## M7 Baseline Profile 与冷启动对照
@@ -178,4 +187,4 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 对齐与优化：Build Tools 36 的 `zipalign -c -P 16 4` 通过；APK 内含 `assets/dexopt/baseline.prof` 和 `baseline.profm`。
 - 安装：正式包在 `Pixel_9` / API 35 冷启动成功；UI 树滚动节点为 0，crash buffer 为空。切换 debug 到 release 签名时仅清除了该模拟器内的测试数据。
 
-Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台记录已经完成；尚未完成的设备重启、低存储、尾批损失量化、最终候选版本号与签名升级复验和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用常规长测替代异常环境门槛。
+Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台记录已经完成，API 27 整机重启边界也已完成验证；尚未完成的低存储、尾批损失量化、最终候选版本号与签名升级复验和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用常规长测替代异常环境门槛。当前不支持的“开机自动恢复”另需产品决策和权限迁移评审。
