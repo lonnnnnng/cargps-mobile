@@ -74,6 +74,7 @@ data class DashboardState(
     val storageReady: Boolean = false,
     val tripCommandInProgress: Boolean = false,
     val storageError: String? = null,
+    val storageBackpressure: Boolean = false,
     val foregroundServiceError: String? = null,
     val confirmedTripCheckpoint: ActiveTripCheckpoint? = null,
     val darkTheme: Boolean = true,
@@ -305,6 +306,7 @@ class DashboardRuntime(
             storageReady = sessionState.storageReady,
             tripCommandInProgress = sessionState.persistence == TripPersistenceState.PROCESSING,
             storageError = sessionState.storageError,
+            storageBackpressure = sessionState.storageBackpressure,
             confirmedTripCheckpoint = sessionState.confirmedCheckpoint,
         )
     }

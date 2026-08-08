@@ -201,7 +201,13 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             stopSelf()
             return
         }
-        if (promoteToForeground(runtime.state.value)) locationEngine.start()
+        if (promoteToForeground(runtime.state.value)) {
+            if (runtime.state.value.storageBackpressure) {
+                locationEngine.stop()
+            } else {
+                locationEngine.start()
+            }
+        }
     }
 
     private fun restoreStartedServiceIfNeeded() {
@@ -225,7 +231,11 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             when (decideStartedServiceRecovery(restoredState)) {
                 StartedServiceRecoveryAction.RESUME_ACTIVE_TRIP -> {
                     if (currentTripAccessState().isReady && promoteToForeground(restoredState)) {
-                        locationEngine.start()
+                        if (restoredState.storageBackpressure) {
+                            locationEngine.stop()
+                        } else {
+                            locationEngine.start()
+                        }
                     }
                 }
                 StartedServiceRecoveryAction.STOP_NO_ACTIVE_TRIP,
@@ -249,7 +259,14 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             startRequested -> LocationSessionPhase.START_PENDING
             else -> LocationSessionPhase.IDLE
         }
-        when (decideLocationEngineAction(clientVisible, sessionPhase, access)) {
+        when (
+            decideLocationEngineAction(
+                clientVisible = clientVisible,
+                sessionPhase = sessionPhase,
+                access = access,
+                storageBackpressure = runtime.state.value.storageBackpressure,
+            )
+        ) {
             LocationEngineAction.START -> {
                 runtime.onForegroundServiceError(null)
                 locationEngine.start()
@@ -281,7 +298,10 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             lastNotificationDistanceBucket = -1L
         }
 
-        if (activeTrip && !access.isReady) {
+        if (activeTrip && state.storageBackpressure) {
+            // 作者：long｜存储尾批达到上限后保留前台服务和结束操作，但暂停定位输入，等待确认检查点恢复。
+            locationEngine.stop()
+        } else if (activeTrip && !access.isReady) {
             locationEngine.stop()
             reportBlockedAccess(access)
         } else if (activeTrip) {
@@ -351,7 +371,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         val endTripPendingIntent = endTripPendingIntent(this)
         val statusText = when (state.tripMode) {
             TripMode.IDLE -> "正在确认行程存储"
-            TripMode.RECORDING -> "正在记录"
+            TripMode.RECORDING -> if (state.storageBackpressure) "等待存储恢复" else "正在记录"
             TripMode.PAUSED -> "行程已暂停"
         }
         val distanceText = String.format(Locale.CHINA, "%.2f km", state.tripStats.distanceMeters / 1_000.0)

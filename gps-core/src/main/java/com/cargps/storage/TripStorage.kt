@@ -30,6 +30,18 @@ class TripStorageCorruptionException(
     val corruption: ActiveTripLoadResult.Corrupt,
 ) : IllegalStateException(corruption.reason)
 
+/**
+ * 作者：long
+ *
+ * 当磁盘持续不可写且内存尾批达到上限时拒绝新点，避免低存储场景把定位回调无限堆进内存。
+ */
+class TripStorageBackpressureException(
+    val pendingPointCount: Int,
+    val maxPendingPointCount: Int,
+) : IllegalStateException(
+    "行程存储暂不可用，未确认定位点已达到上限：$pendingPointCount/$maxPendingPointCount",
+)
+
 fun ActiveTripLoadResult.activeTripOrNull(): ActiveTripRecord? = when (this) {
     ActiveTripLoadResult.Empty -> null
     is ActiveTripLoadResult.Loaded -> record
@@ -81,6 +93,12 @@ interface TripStorage : Closeable {
 
     fun startTrip(startedAtMillis: Long)
 
+    /**
+     * 作者：long
+     *
+     * 接受一个实时定位点；实现可以在磁盘暂不可写且未确认内存达到上限时抛出
+     * [TripStorageBackpressureException]，调用方必须把该点视为未接受并显示存储异常。
+     */
     fun appendPoint(point: TripPoint)
 
     fun appendPoints(points: List<TripPoint>) {

@@ -8,6 +8,7 @@ import com.cargps.storage.ActiveTripLoadResult
 import com.cargps.storage.ActiveTripRecord
 import com.cargps.storage.CompletedTripRecord
 import com.cargps.storage.TripStorage
+import com.cargps.storage.TripStorageBackpressureException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -130,7 +131,10 @@ class TripSessionCoordinatorTest {
     @Test
     fun `定位点同步写入失败进入统一失败流且会话仍可继续处理`() = runTest {
         val expected = IllegalStateException("append failed")
-        val storage = FakeTripStorage(failingOperation = "append", failure = expected)
+        val storage = FakeTripStorage(
+            failingOperation = "append",
+            failure = expected,
+        )
         val coordinator = coordinator(storage)
         coordinator.dispatch(TripSessionCommand.Restore)
         coordinator.dispatch(TripSessionCommand.Start(1_000L))
@@ -150,6 +154,35 @@ class TripSessionCoordinatorTest {
         val tick = coordinator.dispatch(TripSessionCommand.Tick(3_000L))
         assertTrue(tick is TripSessionResult.Accepted)
         assertEquals(TripMode.RECORDING, tick.state.mode)
+        coordinator.close()
+    }
+
+    @Test
+    fun `未确认尾批达到上限时标记背压并在检查点恢复`() = runTest {
+        val expected = TripStorageBackpressureException(16, 16)
+        val storage = FakeTripStorage(
+            failingOperation = "append",
+            failure = expected,
+            checkpoint = ActiveTripCheckpoint(1_000L, 0L, null, null),
+        )
+        val coordinator = coordinator(storage)
+        coordinator.dispatch(TripSessionCommand.Restore)
+        coordinator.dispatch(TripSessionCommand.Start(1_000L))
+
+        val failed = coordinator.dispatch(
+            TripSessionCommand.AppendPoint(TripPoint(2_000L, 4.0, 12.0, true)),
+        )
+
+        assertTrue(failed is TripSessionResult.Failed)
+        assertTrue(failed.state.storageBackpressure)
+        assertEquals(TripPersistenceState.FAILED, failed.state.persistence)
+
+        storage.failingOperation = null
+        val recovered = coordinator.dispatch(TripSessionCommand.Checkpoint)
+
+        assertTrue(recovered is TripSessionResult.Confirmed)
+        assertFalse(recovered.state.storageBackpressure)
+        assertEquals(TripPersistenceState.CONFIRMED, recovered.state.persistence)
         coordinator.close()
     }
 

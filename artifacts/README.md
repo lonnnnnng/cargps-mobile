@@ -42,7 +42,7 @@
 
 发布目录中的校验文件只列 `CarGPS-Mobile-*.apk`。移动或替换 APK 后必须重新运行 SHA-256 校验，不能把旧摘要当作新构建证据。
 
-M2 早期一次 30 分钟后台监测在第 5 个一分钟样本后被外部 `force-stop` 中断；系统退出记录为 `USER REQUESTED / FORCE STOP`，crash buffer 为空。该次监测既不计为通过，也不计为应用崩溃。2026-08-08 已重新完成 Pixel_9 / API 35 的 41 个样本、1831 秒回归、Android 10 / API 29 的 41 个样本、1816 秒回归，以及 Android 8.1 / API 27 的 41 个样本、1816 秒回归；随后 API 27 完成整机重启边界验证：活动行程保留，但系统不自动拉起手机版 Service，打开应用后恢复。低存储、尾批损失量化和真实道路长测仍未完成。
+M2 早期一次 30 分钟后台监测在第 5 个一分钟样本后被外部 `force-stop` 中断；系统退出记录为 `USER REQUESTED / FORCE STOP`，crash buffer 为空。该次监测既不计为通过，也不计为应用崩溃。2026-08-08 已重新完成 Pixel_9 / API 35 的 41 个样本、1831 秒回归、Android 10 / API 29 的 41 个样本、1816 秒回归，以及 Android 8.1 / API 27 的 41 个样本、1816 秒回归；随后 API 27 完成整机重启边界验证：活动行程保留，但系统不自动拉起手机版 Service，打开应用后恢复。当前 16 点有界背压只有 JVM 故障注入和 Pixel_9/API 27 既有 instrumentation 回归，还没有真实低存储截图、通知/GPS 停止恢复或尾批损失量化产物；真实道路长测也仍未完成。
 
 API 35 长测期间 PID 始终为 `4395`、前台服务持续、`cargps-location` 线程始终为 1、crash buffer 始终为 0；锁屏进入 `Dozing/Asleep` 后仍持续记录。正常结束后历史从 0 段增加为 1 段，Home 后 Service、活动通知和定位线程均归零，GPS provider 为 `OFF` 并记录应用注销事件。
 

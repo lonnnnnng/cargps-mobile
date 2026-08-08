@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -105,9 +106,11 @@ class QueuedTripStorageTest {
 
         QueuedTripStorage(delegate).use { storage ->
             storage.startTrip(1_000L)
-            repeat(17) { index ->
+            repeat(16) { index ->
                 storage.appendPoint(TripPoint(index.toLong(), 3.0, 4.0, true))
             }
+            storage.loadActiveTrip()
+            storage.appendPoint(TripPoint(16L, 3.0, 4.0, true))
             storage.loadActiveTrip()
         }
 
@@ -127,6 +130,36 @@ class QueuedTripStorageTest {
         }
 
         assertEquals(listOf(1, 1, 1), delegate.batchSizes)
+    }
+
+    @Test
+    fun `永久写入失败时内存尾批有界且超限点被拒绝`() {
+        val expected = IllegalStateException("disk full")
+        val delegate = BatchRecordingTripStorage(
+            failuresRemaining = Int.MAX_VALUE,
+            failure = expected,
+        )
+
+        QueuedTripStorage(delegate).use { storage ->
+            repeat(16) { index ->
+                storage.appendPoint(TripPoint(index.toLong(), 3.0, 4.0, true))
+            }
+
+            val backpressure = assertThrows(TripStorageBackpressureException::class.java) {
+                storage.appendPoint(TripPoint(16L, 3.0, 4.0, true))
+            }
+            assertEquals(16, backpressure.pendingPointCount)
+            assertEquals(16, backpressure.maxPendingPointCount)
+            assertThrows(IllegalStateException::class.java) { storage.awaitPendingWrites() }
+
+            delegate.failuresRemaining = 0
+            storage.awaitPendingWrites()
+            storage.appendPoint(TripPoint(16L, 3.0, 4.0, true))
+            storage.awaitPendingWrites()
+        }
+
+        assertTrue(delegate.batchSizes.all { it <= 16 })
+        assertEquals(1, delegate.batchSizes.last())
     }
 
     @Test
@@ -204,7 +237,7 @@ class QueuedTripStorageTest {
     }
 
     private class BatchRecordingTripStorage(
-        private var failuresRemaining: Int = 0,
+        var failuresRemaining: Int = 0,
         private val failure: Throwable = IllegalStateException("write failure"),
     ) : TripStorage {
         val batchSizes = mutableListOf<Int>()

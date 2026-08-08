@@ -7,6 +7,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 
@@ -25,6 +26,7 @@ class QueuedTripStorage(
         Thread(runnable, WORKER_THREAD_NAME).apply { isDaemon = true }
     }
     private val pendingPoints = mutableListOf<TripPoint>()
+    private val pendingPointCount = AtomicInteger(0)
     private var pointFlushScheduled = false
     private var lastWriteFailure: Throwable? = null
     private val mutableErrors = MutableSharedFlow<Throwable>(extraBufferCapacity = 8)
@@ -45,12 +47,17 @@ class QueuedTripStorage(
         delegate.startTrip(startedAtMillis)
     }
 
-    override fun appendPoint(point: TripPoint) = enqueue {
-        pendingPoints += point
-        if (pendingPoints.size >= POINT_BATCH_SIZE) {
-            flushPendingPoints()
-        } else if (!pointFlushScheduled) {
-            schedulePointFlush()
+    override fun appendPoint(point: TripPoint) {
+        reservePendingPoint()
+        enqueue(
+            onRejected = { pendingPointCount.decrementAndGet() },
+        ) {
+            pendingPoints += point
+            if (pendingPoints.size >= POINT_BATCH_SIZE) {
+                flushPendingPoints()
+            } else if (!pointFlushScheduled) {
+                schedulePointFlush()
+            }
         }
     }
 
@@ -94,9 +101,13 @@ class QueuedTripStorage(
     private fun enqueue(
         flushPointsFirst: Boolean = false,
         confirmsWrite: Boolean = false,
+        onRejected: () -> Unit = {},
         block: () -> Unit,
     ) {
-        if (closed.get()) return
+        if (closed.get()) {
+            onRejected()
+            return
+        }
         runCatching {
             executor.execute {
                 runCatching {
@@ -109,7 +120,10 @@ class QueuedTripStorage(
                     if (pendingPoints.isNotEmpty()) schedulePointFlush()
                 }
             }
-        }.onFailure(::reportWriteFailure)
+        }.onFailure {
+            onRejected()
+            reportWriteFailure(it)
+        }
     }
 
     private fun <T> query(block: () -> T): T {
@@ -139,8 +153,23 @@ class QueuedTripStorage(
         delegate.appendPoints(batch)
         // 作者：long｜SQLite 批量事务成功后才移除内存点；磁盘异常时保留原批次，后续定时冲刷或查询屏障可以重试。
         pendingPoints.subList(0, batch.size).clear()
+        pendingPointCount.addAndGet(-batch.size)
         lastWriteFailure = null
         publishConfirmedCheckpoint()
+    }
+
+    private fun reservePendingPoint() {
+        check(!closed.get()) { "行程存储已关闭" }
+        while (true) {
+            val current = pendingPointCount.get()
+            if (current >= MAX_PENDING_POINT_COUNT) {
+                throw TripStorageBackpressureException(
+                    pendingPointCount = current,
+                    maxPendingPointCount = MAX_PENDING_POINT_COUNT,
+                )
+            }
+            if (pendingPointCount.compareAndSet(current, current + 1)) return
+        }
     }
 
     private fun publishConfirmedCheckpoint() {
@@ -187,6 +216,7 @@ class QueuedTripStorage(
     companion object {
         private const val WORKER_THREAD_NAME = "cargps-trip-storage"
         private const val POINT_BATCH_SIZE = 16
+        private const val MAX_PENDING_POINT_COUNT = POINT_BATCH_SIZE
         private const val POINT_BATCH_DELAY_MILLIS = 1_000L
         private const val POINT_FLUSH_RETRY_DELAY_MILLIS = 50L
     }

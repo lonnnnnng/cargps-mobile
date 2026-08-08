@@ -68,4 +68,17 @@ class LocationEnginePolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `未确认尾批达到上限时停止定位并保留行程`() {
+        assertEquals(
+            LocationEngineAction.STOP,
+            decideLocationEngineAction(
+                clientVisible = true,
+                sessionPhase = LocationSessionPhase.ACTIVE,
+                access = TripAccessState.Ready,
+                storageBackpressure = true,
+            ),
+        )
+    }
 }

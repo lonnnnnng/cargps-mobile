@@ -8,6 +8,7 @@ import com.cargps.storage.ActiveTripRecord
 import com.cargps.storage.ActiveTripCheckpoint
 import com.cargps.storage.CompletedTripRecord
 import com.cargps.storage.TripStorage
+import com.cargps.storage.TripStorageBackpressureException
 import com.cargps.storage.activeTripOrNull
 import java.io.Closeable
 import kotlinx.coroutines.CancellationException
@@ -38,6 +39,7 @@ data class TripSessionState(
     val storageReady: Boolean = false,
     val persistence: TripPersistenceState = TripPersistenceState.LOADING,
     val storageError: String? = null,
+    val storageBackpressure: Boolean = false,
     val confirmedCheckpoint: ActiveTripCheckpoint? = null,
 )
 
@@ -103,6 +105,7 @@ class TripSessionCoordinator(
                         confirmedCheckpoint = checkpoint,
                         persistence = TripPersistenceState.CONFIRMED,
                         storageError = null,
+                        storageBackpressure = false,
                     )
                 }
             }
@@ -133,6 +136,7 @@ class TripSessionCoordinator(
             storageReady = false,
             persistence = TripPersistenceState.LOADING,
             storageError = null,
+            storageBackpressure = false,
         )
         return try {
             val (recentTrips, activeTrip, checkpoint) = withContext(storageDispatcher) {
@@ -175,6 +179,7 @@ class TripSessionCoordinator(
                     restoredTrip = false,
                     persistence = TripPersistenceState.CONFIRMED,
                     storageError = null,
+                    storageBackpressure = false,
                 )
             },
             breakLocationSegment = true,
@@ -197,6 +202,7 @@ class TripSessionCoordinator(
                     stats = snapshot(atMillis),
                     persistence = TripPersistenceState.CONFIRMED,
                     storageError = null,
+                    storageBackpressure = false,
                 )
             },
         )
@@ -221,6 +227,7 @@ class TripSessionCoordinator(
                     stats = snapshot(atMillis),
                     persistence = TripPersistenceState.CONFIRMED,
                     storageError = null,
+                    storageBackpressure = false,
                 )
             },
             breakLocationSegment = true,
@@ -314,6 +321,7 @@ class TripSessionCoordinator(
                 confirmedCheckpoint = checkpoint,
                 persistence = TripPersistenceState.CONFIRMED,
                 storageError = null,
+                storageBackpressure = false,
             )
             TripSessionResult.Confirmed(mutableState.value)
         } catch (error: CancellationException) {
@@ -393,6 +401,8 @@ class TripSessionCoordinator(
             storageReady = keepReady,
             persistence = TripPersistenceState.FAILED,
             storageError = error.storageMessage(),
+            storageBackpressure = mutableState.value.storageBackpressure ||
+                error is TripStorageBackpressureException,
         )
         return mutableState.value
     }
