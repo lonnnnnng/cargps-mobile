@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.ServiceConnection
 import android.location.Location
 import android.location.LocationManager
@@ -12,8 +13,12 @@ import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import com.cargps.DashboardRuntime
 import com.cargps.TripMode
 import com.cargps.domain.TripPoint
@@ -35,6 +40,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -140,6 +146,75 @@ class TripRecordingServiceLifecycleInstrumentedTest {
             awaitCondition("second service destroy", 5_000L) { location.closes.get() >= 2 }
         } finally {
             runCatching { context.stopService(TripRecordingService.bindIntent(context)) }
+            TripRecordingService.dependenciesFactoryForTests = null
+            runtime.close()
+            runtimeScope.cancel()
+        }
+    }
+
+    @Test
+    fun active_trip_activity_recreation_rebinds_existing_service_without_duplicate_location() {
+        grantForegroundLocationPermissions()
+        val storage = ImmediateEmptyTripStorage()
+        val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val runtime = DashboardRuntime(scope = runtimeScope, storage = storage)
+        awaitCondition("runtime restore", 5_000L) { runtime.state.value.storageReady }
+        val location = LocationProbe()
+        val serviceCreations = AtomicInteger()
+        TripRecordingService.dependenciesFactoryForTests = {
+            serviceCreations.incrementAndGet()
+            TripRecordingServiceDependencies(
+                runtime = runtime,
+                startLocation = location::start,
+                stopLocation = location::stop,
+                closeLocation = location::close,
+                readAccessState = { TripAccessState.Ready },
+            )
+        }
+
+        var scenario: ActivityScenario<MainActivity>? = null
+        try {
+            ContextCompat.startForegroundService(
+                context,
+                TripRecordingService.startTripIntent(context),
+            )
+            awaitCondition("recording service start", 5_000L) {
+                runtime.state.value.tripMode == TripMode.RECORDING && location.starts.get() == 1
+            }
+
+            scenario = ActivityScenario.launch(
+                Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+            assertTrue(
+                "首次 Activity 没有通过 Binder 取得活动行程状态",
+                device.wait(Until.hasObject(By.text("暂停行程")), 5_000L),
+            )
+            val firstActivity = AtomicReference<MainActivity>()
+            scenario.onActivity(firstActivity::set)
+            val startsBeforeRecreation = location.starts.get()
+            val stopsBeforeRecreation = location.stops.get()
+
+            scenario.recreate()
+
+            assertTrue(
+                "重建后的 Activity 没有重新绑定现有 Service",
+                device.wait(Until.hasObject(By.text("暂停行程")), 5_000L),
+            )
+            val recreatedActivity = AtomicReference<MainActivity>()
+            scenario.onActivity(recreatedActivity::set)
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+
+            // 作者：long｜真实 Activity 重建必须只替换 UI 实例；活动行程仍由原 Service 持有，重绑和 ensure 命令不能再注册第二套 GPS 监听。
+            assertNotSame(firstActivity.get(), recreatedActivity.get())
+            assertEquals(1, serviceCreations.get())
+            assertEquals(startsBeforeRecreation, location.starts.get())
+            assertEquals(stopsBeforeRecreation, location.stops.get())
+            assertEquals(TripMode.RECORDING, runtime.state.value.tripMode)
+        } finally {
+            scenario?.close()
+            runCatching { context.stopService(TripRecordingService.bindIntent(context)) }
+            awaitCondition("service location cleanup", 5_000L) { location.closes.get() > 0 }
             TripRecordingService.dependenciesFactoryForTests = null
             runtime.close()
             runtimeScope.cancel()
@@ -387,6 +462,83 @@ class TripRecordingServiceLifecycleInstrumentedTest {
             awaitCondition("location accepted after actor restore", 5_000L) {
                 storage.appendCalls.get() == 2 && storage.persistedPoints.get() == 1
             }
+        } finally {
+            storage.releaseRecoveryRestore.countDown()
+            runCatching { context.stopService(TripRecordingService.bindIntent(context)) }
+            TripRecordingService.dependenciesFactoryForTests = null
+            runtime.close()
+            runtimeScope.cancel()
+        }
+    }
+
+    @Test
+    fun second_actor_failure_enters_terminal_state_without_rebuild_loop() {
+        grantForegroundLocationPermissions()
+        val storage = RecoverableActorFailureStorage(appendFailuresBeforeSuccess = 2)
+        val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val runtime = DashboardRuntime(scope = runtimeScope, storage = storage)
+        awaitCondition("runtime restore", 5_000L) { runtime.state.value.storageReady }
+        val location = LocationProbe()
+        val serviceReference = AtomicReference<TripRecordingService>()
+        TripRecordingService.dependenciesFactoryForTests = { service ->
+            serviceReference.set(service)
+            TripRecordingServiceDependencies(
+                runtime = runtime,
+                startLocation = location::start,
+                stopLocation = location::stop,
+                closeLocation = location::close,
+                readAccessState = { TripAccessState.Ready },
+            )
+        }
+
+        try {
+            ContextCompat.startForegroundService(
+                context,
+                TripRecordingService.startTripIntent(context),
+            )
+            awaitCondition("recording service start", 5_000L) {
+                runtime.state.value.tripMode == TripMode.RECORDING && location.starts.get() == 1
+            }
+
+            serviceReference.get().onLocation(
+                testLocation(System.currentTimeMillis(), 31.2304, 121.4737),
+            )
+            assertTrue(
+                "首次 actor 异常没有进入单次恢复",
+                storage.recoveryRestoreEntered.await(5, TimeUnit.SECONDS),
+            )
+            storage.releaseRecoveryRestore.countDown()
+            awaitCondition("first actor restore", 5_000L) {
+                runtime.state.value.storageReady &&
+                    runtime.state.value.tripRuntimeError == null &&
+                    location.starts.get() == 2
+            }
+
+            val terminalFixAtMillis = System.currentTimeMillis() + 1_000L
+            serviceReference.get().onLocation(
+                testLocation(terminalFixAtMillis, 31.2305, 121.4738),
+            )
+            awaitCondition("terminal actor failure", 5_000L) {
+                !runtime.state.value.storageReady &&
+                    runtime.state.value.tripRuntimeError != null &&
+                    !runtime.state.value.tripRuntimeRecovering &&
+                    location.stops.get() >= 2
+            }
+            awaitNotificationTitle("行程处理异常", 2_000L)
+
+            val rejectedFixAtMillis = terminalFixAtMillis + 1_000L
+            serviceReference.get().onLocation(
+                testLocation(rejectedFixAtMillis, 31.2306, 121.4739),
+            )
+            awaitCondition("terminal state still displays latest fix", 5_000L) {
+                runtime.state.value.lastFixAtMillis == rejectedFixAtMillis
+            }
+
+            // 作者：long｜第二次 actor 异常是本 Runtime 的终态；后续定位可更新仪表，但不能再进入已关闭队列、重建第三个 actor 或重启定位。
+            assertEquals(2, storage.loadCalls.get())
+            assertEquals(2, storage.appendCalls.get())
+            assertEquals(2, location.starts.get())
+            assertTrue(runtime.state.value.tripRuntimeError?.contains("injected actor failure") == true)
         } finally {
             storage.releaseRecoveryRestore.countDown()
             runCatching { context.stopService(TripRecordingService.bindIntent(context)) }
@@ -680,15 +832,17 @@ class TripRecordingServiceLifecycleInstrumentedTest {
         }
     }
 
-    private class RecoverableActorFailureStorage : TripStorage {
+    private class RecoverableActorFailureStorage(
+        appendFailuresBeforeSuccess: Int = 1,
+    ) : TripStorage {
         val recoveryRestoreEntered = CountDownLatch(1)
         val releaseRecoveryRestore = CountDownLatch(1)
         val appendCalls = AtomicInteger()
         val persistedPoints = AtomicInteger()
-        private val loadCalls = AtomicInteger()
+        val loadCalls = AtomicInteger()
         private val points = mutableListOf<TripPoint>()
         @Volatile private var startedAtMillis: Long? = null
-        @Volatile private var failNextAppend = true
+        @Volatile private var remainingAppendFailures = appendFailuresBeforeSuccess
 
         override fun loadActiveTrip(): ActiveTripLoadResult {
             if (loadCalls.incrementAndGet() > 1) {
@@ -716,8 +870,8 @@ class TripRecordingServiceLifecycleInstrumentedTest {
 
         override fun appendPoint(point: TripPoint) {
             appendCalls.incrementAndGet()
-            if (failNextAppend) {
-                failNextAppend = false
+            if (remainingAppendFailures > 0) {
+                remainingAppendFailures -= 1
                 throw CancellationException("injected actor failure")
             }
             synchronized(points) { points += point }
