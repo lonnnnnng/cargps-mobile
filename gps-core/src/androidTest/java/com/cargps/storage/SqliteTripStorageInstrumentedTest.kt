@@ -1,6 +1,7 @@
 package com.cargps.storage
 
 import android.content.Context
+import android.database.sqlite.SQLiteException
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.cargps.TripMode
@@ -298,6 +299,50 @@ class SqliteTripStorageInstrumentedTest {
                 }
                 assertFalse(columns.contains("total_paused"))
             }
+        }
+    }
+
+    @Test
+    fun roomStorageKeepsActiveTripWhenSqliteConnectionIsReadOnly() {
+        val durablePoint = TripPoint(2_000L, 8.0, 12.5, true)
+        RoomTripStorage(context, DATABASE_NAME).use { storage ->
+            storage.startTrip(1_000L)
+            storage.appendPoints(listOf(durablePoint))
+        }
+
+        val failure = assertThrows(SQLiteException::class.java) {
+            RoomTripStorage(
+                context = context,
+                databaseName = DATABASE_NAME,
+                onDatabaseOpen = { database ->
+                    // 作者：long｜只读连接模拟磁盘永久不可写，验证真实 Room 事务失败时不清除活动行程。
+                    database.execSQL("PRAGMA query_only = ON")
+                },
+            ).use { storage ->
+                storage.appendPoints(
+                    List(16) { index ->
+                        TripPoint(
+                            timestampMillis = 3_000L + index,
+                            speedMps = 4.0,
+                            distanceFromPreviousMeters = 1.0,
+                            moving = true,
+                        )
+                    },
+                )
+            }
+        }
+        assertTrue(
+            failure.message.orEmpty().contains("readonly", ignoreCase = true) ||
+                failure.message.orEmpty().contains("read-only", ignoreCase = true),
+        )
+
+        RoomTripStorage(context, DATABASE_NAME).use { storage ->
+            val restored = requireNotNull(storage.loadActiveTrip().activeTripOrNull())
+            assertEquals(listOf(durablePoint), restored.points)
+            assertEquals(
+                ActiveTripCheckpoint(1_000L, 1L, 1L, 2_000L),
+                storage.loadActiveTripCheckpoint(),
+            )
         }
     }
 

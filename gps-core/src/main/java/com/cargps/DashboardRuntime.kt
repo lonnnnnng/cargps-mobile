@@ -98,6 +98,12 @@ class DashboardRuntime(
     private var previousSample: LocationSample? = null
     private var previousAndroidLocation: Location? = null
 
+    private enum class LocationSampleResult {
+        IGNORED,
+        DISPLAYED,
+        SEGMENT_BROKEN,
+    }
+
     private val _state = MutableStateFlow(DashboardState())
     val state: StateFlow<DashboardState> = _state.asStateFlow()
     private val sessionCoordinator = TripSessionCoordinator(
@@ -144,11 +150,46 @@ class DashboardRuntime(
             bearingDegrees = location.bearing.takeIf { location.hasBearing() },
             speedMps = location.speed.takeIf { location.hasSpeed() },
         )
-        val decision = qualityGate.evaluate(previousSample, sample)
-        if (!decision.displayable) return
-
-        val distanceMeters = if (decision.connectsToPrevious && previousAndroidLocation != null) {
+        val distanceToPreviousMeters = if (previousAndroidLocation != null) {
             previousAndroidLocation?.distanceTo(location)?.toDouble() ?: 0.0
+        } else {
+            0.0
+        }
+        when (processLocationSample(sample, distanceToPreviousMeters)) {
+            LocationSampleResult.IGNORED -> Unit
+            LocationSampleResult.DISPLAYED -> previousAndroidLocation = Location(location)
+            LocationSampleResult.SEGMENT_BROKEN -> previousAndroidLocation = null
+        }
+    }
+
+    /**
+     * 作者：long｜把平台 Location 转换后的纯样本处理单独留出 seam，便于验证存储故障后的首点分段，
+     * 同时保证真正的 Android 回调仍由 [onLocation] 负责计算地理距离和复制平台对象。
+     */
+    internal fun onLocationSample(
+        sample: LocationSample,
+        distanceToPreviousMeters: Double,
+    ): Boolean {
+        return processLocationSample(sample, distanceToPreviousMeters) != LocationSampleResult.IGNORED
+    }
+
+    private fun processLocationSample(
+        sample: LocationSample,
+        distanceToPreviousMeters: Double,
+    ): LocationSampleResult {
+        // 作者：long｜状态流可能晚于存储线程回调，先直接检查协调器状态，避免背压窗口继续接收新点。
+        val sessionState = sessionCoordinator.state.value
+        val storageInputBlocked = sessionState.persistence == TripPersistenceState.FAILED ||
+            sessionState.storageBackpressure
+        if (storageInputBlocked) {
+            breakLocationSegment()
+        }
+
+        val decision = qualityGate.evaluate(previousSample, sample)
+        if (!decision.displayable) return LocationSampleResult.IGNORED
+
+        val distanceMeters = if (decision.connectsToPrevious) {
+            distanceToPreviousMeters.coerceAtLeast(0.0)
         } else {
             0.0
         }
@@ -166,18 +207,27 @@ class DashboardRuntime(
         )
         val statsSpeedMps = maxOf(reading.smoothedMps, derivedSpeedMps ?: 0.0)
 
-        if (_state.value.tripMode == TripMode.RECORDING) {
+        val isRecording = _state.value.tripMode == TripMode.RECORDING
+        if (isRecording && storageInputBlocked) {
+            // 作者：long｜存储失败或未确认点达到上限时，回调只更新仪表，不再把新点送入行程累计或存储队列。
+            breakLocationSegment()
+        } else if (isRecording) {
             val point = TripPoint(
                 timestampMillis = sample.timestampMillis,
                 speedMps = statsSpeedMps,
                 distanceFromPreviousMeters = distanceMeters,
                 moving = statsSpeedMps >= MOVING_THRESHOLD_MPS,
             )
-            tripEvents.tryDispatch(TripSessionCommand.AppendPoint(point))
+            if (!tripEvents.tryDispatch(TripSessionCommand.AppendPoint(point))) {
+                // 作者：long｜队列关闭或 actor 异常时，当前点没有进入会话，不能把它留下作为下一点的连接基准。
+                breakLocationSegment()
+            } else {
+                previousSample = sample
+            }
+        } else {
+            previousSample = sample
         }
 
-        previousSample = sample
-        previousAndroidLocation = Location(location)
         update {
             copy(
                 fixStatus = if ((sample.accuracyMeters ?: Float.MAX_VALUE) <= 30f) {
@@ -193,6 +243,13 @@ class DashboardRuntime(
                 accuracyMeters = sample.accuracyMeters,
                 lastFixAtMillis = sample.timestampMillis,
             )
+        }
+        return if (isRecording && storageInputBlocked) {
+            LocationSampleResult.SEGMENT_BROKEN
+        } else if (isRecording && previousSample == null) {
+            LocationSampleResult.SEGMENT_BROKEN
+        } else {
+            LocationSampleResult.DISPLAYED
         }
     }
 
@@ -290,25 +347,47 @@ class DashboardRuntime(
     private fun handleSessionResult(result: TripSessionResult) {
         // 作者：long｜等待型命令返回前同步发布确认状态，避免 Service 开启定位后首个回调仍读取旧行程模式。
         publishSessionState(result.state)
-        if (result is TripSessionResult.Confirmed && result.breakLocationSegment) {
-            // 作者：long｜会话边界确认落盘后才断开定位连续段，失败时继续沿用旧会话，避免 UI 与数据库状态分叉。
-            previousSample = null
-            previousAndroidLocation = null
+        when (result) {
+            is TripSessionResult.Confirmed -> if (result.breakLocationSegment) {
+                // 作者：long｜开始、恢复、结束等已确认边界必须断开上一段，避免跨会话补算位移和移动时长。
+                breakLocationSegment()
+            }
+            is TripSessionResult.Failed,
+            is TripSessionResult.Rejected,
+            -> {
+                // 作者：long｜失败点未被会话接受，恢复后的首个有效点只能从新分段起算。
+                breakLocationSegment()
+            }
+            is TripSessionResult.Accepted,
+            is TripSessionResult.AlreadyApplied,
+            -> Unit
         }
     }
 
-    private fun publishSessionState(sessionState: TripSessionState) = update {
-        copy(
-            tripMode = sessionState.mode,
-            tripStats = sessionState.stats,
-            recentTrips = sessionState.recentTrips,
-            restoredTrip = sessionState.restoredTrip,
-            storageReady = sessionState.storageReady,
-            tripCommandInProgress = sessionState.persistence == TripPersistenceState.PROCESSING,
-            storageError = sessionState.storageError,
-            storageBackpressure = sessionState.storageBackpressure,
-            confirmedTripCheckpoint = sessionState.confirmedCheckpoint,
-        )
+    private fun publishSessionState(sessionState: TripSessionState) {
+        if (sessionState.persistence == TripPersistenceState.FAILED || sessionState.storageBackpressure) {
+            // 作者：long｜异步存储错误可能不经过当前定位事件的结果回调，状态流进入失败时也要切断定位段。
+            breakLocationSegment()
+        }
+        update {
+            copy(
+                tripMode = sessionState.mode,
+                tripStats = sessionState.stats,
+                recentTrips = sessionState.recentTrips,
+                restoredTrip = sessionState.restoredTrip,
+                storageReady = sessionState.storageReady,
+                tripCommandInProgress = sessionState.persistence == TripPersistenceState.PROCESSING,
+                storageError = sessionState.storageError,
+                storageBackpressure = sessionState.storageBackpressure,
+                confirmedTripCheckpoint = sessionState.confirmedCheckpoint,
+            )
+        }
+    }
+
+    private fun breakLocationSegment() {
+        previousSample = null
+        previousAndroidLocation = null
+        speedEstimator.reset()
     }
 
     private inline fun update(block: DashboardState.() -> DashboardState) {

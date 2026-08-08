@@ -1,5 +1,6 @@
 package com.cargps
 
+import com.cargps.domain.LocationSample
 import com.cargps.domain.TripPoint
 import com.cargps.domain.TripStats
 import com.cargps.storage.ActiveTripRecord
@@ -7,6 +8,7 @@ import com.cargps.storage.ActiveTripCheckpoint
 import com.cargps.storage.ActiveTripLoadResult
 import com.cargps.storage.CompletedTripRecord
 import com.cargps.storage.TripStorage
+import com.cargps.storage.TripStorageBackpressureException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -135,6 +137,118 @@ class DashboardRuntimePersistenceTest {
     }
 
     @Test
+    fun `存储失败后恢复首点不跨故障窗口补算距离速度和确认序列`() = runTest(mainDispatcherRule.dispatcher) {
+        val storage = FakeTripStorage()
+        val runtime = DashboardRuntime(
+            scope = this,
+            storage = storage,
+            ioDispatcher = mainDispatcherRule.dispatcher,
+        )
+        advanceUntilIdle()
+        runtime.startTripAndAwait(1_000L)
+
+        runtime.onLocationSample(
+            sample = LocationSample(2_000L, 0.0, 0.0, accuracyMeters = 5f),
+            distanceToPreviousMeters = 0.0,
+        )
+        advanceUntilIdle()
+
+        storage.appendFailure = TripStorageBackpressureException(16, 16)
+        runtime.onLocationSample(
+            sample = LocationSample(3_000L, 0.001, 0.0, accuracyMeters = 5f),
+            distanceToPreviousMeters = 111.0,
+        )
+        advanceUntilIdle()
+
+        assertTrue(runtime.state.value.storageBackpressure)
+        assertEquals(0.0, runtime.state.value.tripStats.distanceMeters, 0.001)
+        assertEquals(1, storage.persistedPoints.size)
+        assertEquals(2, storage.appendCalls)
+
+        runtime.onLocationSample(
+            sample = LocationSample(3_500L, 0.0015, 0.0, accuracyMeters = 5f),
+            distanceToPreviousMeters = 55.5,
+        )
+        advanceUntilIdle()
+
+        assertEquals(2, storage.appendCalls)
+        assertEquals(1, storage.persistedPoints.size)
+
+        storage.appendFailure = null
+        runtime.checkpointTripWritesAndAwait()
+        advanceUntilIdle()
+
+        runtime.onLocationSample(
+            sample = LocationSample(4_000L, 0.002, 0.0, accuracyMeters = 5f),
+            distanceToPreviousMeters = 111.0,
+        )
+        advanceUntilIdle()
+        val checkpoint = runtime.checkpointTripWritesAndAwait().confirmedTripCheckpoint
+
+        assertEquals(0.0, runtime.state.value.tripStats.distanceMeters, 0.001)
+        assertEquals(2, storage.persistedPoints.size)
+        assertEquals(0.0, storage.persistedPoints.last().distanceFromPreviousMeters, 0.001)
+        assertEquals(0.0, storage.persistedPoints.last().speedMps, 0.001)
+        assertEquals(2L, checkpoint?.confirmedPointCount)
+        runtime.close()
+    }
+
+    @Test
+    fun `一般存储失败期间不再接收定位点且恢复首点重新断开`() = runTest(mainDispatcherRule.dispatcher) {
+        val storage = FakeTripStorage()
+        val runtime = DashboardRuntime(
+            scope = this,
+            storage = storage,
+            ioDispatcher = mainDispatcherRule.dispatcher,
+        )
+        advanceUntilIdle()
+        runtime.startTripAndAwait(1_000L)
+
+        runtime.onLocationSample(
+            sample = LocationSample(2_000L, 0.0, 0.0, accuracyMeters = 5f, speedMps = 10f),
+            distanceToPreviousMeters = 0.0,
+        )
+        advanceUntilIdle()
+
+        storage.appendFailure = IllegalStateException("database unavailable")
+        runtime.onLocationSample(
+            sample = LocationSample(3_000L, 0.001, 0.0, accuracyMeters = 5f, speedMps = 10f),
+            distanceToPreviousMeters = 111.0,
+        )
+        advanceUntilIdle()
+
+        assertEquals("database unavailable", runtime.state.value.storageError)
+        assertEquals(2, storage.appendCalls)
+        assertEquals(1, storage.persistedPoints.size)
+
+        runtime.onLocationSample(
+            sample = LocationSample(3_500L, 0.0015, 0.0, accuracyMeters = 5f, speedMps = 10f),
+            distanceToPreviousMeters = 55.5,
+        )
+        advanceUntilIdle()
+
+        // 作者：long｜错误仍未被确认前，新的定位回调只能更新仪表，不能继续向存储队列投递失败点。
+        assertEquals(2, storage.appendCalls)
+        assertEquals(1, storage.persistedPoints.size)
+
+        storage.appendFailure = null
+        runtime.checkpointTripWritesAndAwait()
+        advanceUntilIdle()
+
+        runtime.onLocationSample(
+            sample = LocationSample(4_000L, 0.002, 0.0, accuracyMeters = 5f, speedMps = 10f),
+            distanceToPreviousMeters = 111.0,
+        )
+        advanceUntilIdle()
+
+        assertEquals(3, storage.appendCalls)
+        assertEquals(2, storage.persistedPoints.size)
+        assertEquals(0.0, storage.persistedPoints.last().distanceFromPreviousMeters, 0.001)
+        assertEquals(10.0, storage.persistedPoints.last().speedMps, 0.001)
+        runtime.close()
+    }
+
+    @Test
     fun `暂停状态结束行程时暂停时长只累计一次`() = runTest(mainDispatcherRule.dispatcher) {
         val storage = FakeTripStorage(
             activeTrip = ActiveTripRecord(
@@ -184,14 +298,26 @@ class DashboardRuntimePersistenceTest {
         private var checkpoint: ActiveTripCheckpoint? = null,
     ) : TripStorage {
         val completed = mutableListOf<CompletedTripRecord>()
+        var appendFailure: Throwable? = null
+        var appendCalls: Int = 0
         var awaitGate: CountDownLatch? = null
+
+        val persistedPoints: List<TripPoint>
+            get() = activeTrip?.points.orEmpty()
 
         override fun loadActiveTrip(): ActiveTripLoadResult {
             loadFailure?.let { throw it }
             return activeTrip?.let(ActiveTripLoadResult::Loaded) ?: ActiveTripLoadResult.Empty
         }
 
-        override fun loadActiveTripCheckpoint(): ActiveTripCheckpoint? = checkpoint
+        override fun loadActiveTripCheckpoint(): ActiveTripCheckpoint? = checkpoint ?: activeTrip?.let { trip ->
+            ActiveTripCheckpoint(
+                startedAtMillis = trip.startedAtMillis,
+                confirmedPointCount = trip.points.size.toLong(),
+                lastConfirmedPointSequence = trip.points.size.toLong().takeIf { it > 0L },
+                lastConfirmedPointTimestampMillis = trip.points.lastOrNull()?.timestampMillis,
+            )
+        }
 
         override fun startTrip(startedAtMillis: Long) {
             activeTrip = ActiveTripRecord(
@@ -204,6 +330,8 @@ class DashboardRuntimePersistenceTest {
         }
 
         override fun appendPoint(point: TripPoint) {
+            appendCalls += 1
+            appendFailure?.let { throw it }
             activeTrip = activeTrip?.copy(points = activeTrip.orEmptyPoints() + point)
         }
 
@@ -231,4 +359,5 @@ class DashboardRuntimePersistenceTest {
 
         private fun ActiveTripRecord?.orEmptyPoints(): List<TripPoint> = this?.points.orEmpty()
     }
+
 }

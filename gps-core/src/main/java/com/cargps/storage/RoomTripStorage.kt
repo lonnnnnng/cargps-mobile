@@ -2,6 +2,8 @@ package com.cargps.storage
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.cargps.TripMode
 import com.cargps.domain.TripPoint
 import com.cargps.domain.TripStats
@@ -9,6 +11,7 @@ import com.cargps.domain.TripStats
 class RoomTripStorage(
     context: Context,
     databaseName: String = DEFAULT_DATABASE_NAME,
+    private val onDatabaseOpen: ((SupportSQLiteDatabase) -> Unit)? = null,
 ) : TripStorage {
     private val database = Room.databaseBuilder(
         context.applicationContext,
@@ -18,7 +21,18 @@ class RoomTripStorage(
         RoomTripDatabase.MIGRATION_1_2,
         RoomTripDatabase.MIGRATION_2_3,
         RoomTripDatabase.MIGRATION_3_4,
-    ).build()
+    ).apply {
+        onDatabaseOpen?.let { callback ->
+            // 作者：long｜生产装配不传入回调；测试只借此在 Room 实际打开的连接上注入永久 I/O 故障。
+            addCallback(
+                object : RoomDatabase.Callback() {
+                    override fun onOpen(db: SupportSQLiteDatabase) {
+                        callback(db)
+                    }
+                },
+            )
+        }
+    }.build()
     private val dao = database.tripDao()
 
     override fun loadActiveTrip(): ActiveTripLoadResult {

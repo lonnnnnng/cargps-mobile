@@ -65,7 +65,7 @@ flowchart LR
 ## 5. 工程与模块边界
 
 - `gps-core`：注册和注销系统位置、NMEA、GNSS 状态监听，并承载质量门、速度估算和行程统计；不包含手机界面。
-- `mobile-app`：包名 `com.cargps.mobile`；`CarGpsApplication` 持有进程内单例 `DashboardRuntime`，`TripRecordingService` 唯一持有 `LocationEngine`，Activity 只负责竖屏界面、权限入口、服务绑定和用户命令。
+- `mobile-app`：包名 `com.cargps.mobile`；`CarGpsApplication` 持有进程内单例 `DashboardRuntime`，`TripRecordingService` 唯一持有 `LocationEngine`，Activity 只负责竖屏界面、权限入口、服务绑定和用户命令。Service 内的 `LocationEngineSessionController` 统一接收可见性、会话阶段、权限/Provider 与存储故障信号，负责幂等地 reconcile 启停动作；控制器只缓存已成功执行的动作，底层 `LocationEngine.start()` 失败时不缓存，允许后续生命周期事件重试。
 - `nmea-parser`：位于 `gps-core`，处理校验和、字段解析和语句容错，不维护行程状态。
 - `location-quality`：位于 `gps-core`，判断样本是否可显示、是否可累计、是否发生过期或断点。
 - `speed-estimator`：位于 `gps-core`，处理速度来源选择、单位转换、异常值过滤和平滑。
@@ -83,7 +83,7 @@ flowchart LR
 - Service 使用常驻低优先级通知，提供返回应用和结束行程的显式不可变 `PendingIntent`；通知按模式、每 10 米或最多每 5 秒刷新，避免每秒重建 SystemUI 视图。
 - Manifest 已声明 `FOREGROUND_SERVICE`、`FOREGROUND_SERVICE_LOCATION` 和 `android:foregroundServiceType="location"`；Activity 与 Service 在启动、恢复和系统状态变化时使用统一 `TripAccessState` 检查精确位置、GPS Provider 和 API 33+ 通知权限。
 - API 27 不需要 `ACCESS_BACKGROUND_LOCATION`，该权限从 API 29 才出现。当前 M2 不申请后台位置；只有未来确需从后台创建定位服务时才单独评审该权限和系统豁免。
-- M2 核心实现及 Pixel_9 / API 35、API 27、API 29、API 31 聚焦短路径已验证；API 31 已补充锁屏保持和活动行程撤权后的受阻结束路径，API 27/API 29 还完成了活动行程覆盖升级后的前台服务恢复。Pixel_9 / API 35、Android 10 / API 29 和 Android 8.1 / API 27 已分别完成 41 个样本、1831/1816/1816 秒的 Home、系统设置、锁屏睡眠和解锁返回回归，期间单进程、前台服务、通知和单定位线程持续，结束后资源清理。API 27 整机重启边界也已验证：活动行程数据保留，但系统不自动启动 Service；用户打开应用后由 Room 恢复并重新建立定位。最新背压分支已通过 `gps-core` 51/51、手机版 26/26 JVM、完整本地构建，以及 Pixel_9 / API 35 和 API 27 各 12/12、6/6 instrumentation 回归。真实低存储量化、通知与定位停止/恢复的故障注入、真实 Service 全路径和真实道路长测仍未完成。
+- M2 核心实现及 Pixel_9 / API 35、API 27、API 29、API 31 聚焦短路径已验证；API 31 已补充锁屏保持和活动行程撤权后的受阻结束路径，API 27/API 29 还完成了活动行程覆盖升级后的前台服务恢复。Pixel_9 / API 35、Android 10 / API 29 和 Android 8.1 / API 27 已分别完成 41 个样本、1831/1816/1816 秒的 Home、系统设置、锁屏睡眠和解锁返回回归，期间单进程、前台服务、通知和单定位线程持续，结束后资源清理。API 27 整机重启边界也已验证：活动行程数据保留，但系统不自动启动 Service；用户打开应用后由 Room 恢复并重新建立定位。最新背压、普通持久化失败输入阻断与恢复首点分段分支已通过 `gps-core` 53/53、手机版 31/31 JVM、完整本地构建，以及 Pixel_9 / API 35 和 API 27 的完整 `gps-core` 14/14、手机版 6/6 instrumentation；两档设备的 Runtime/Room 背压专项各为 1/1。Service 的所有定位生命周期入口现在经 `LocationEngineSessionController` 统一 reconcile，重复重绑/恢复只执行一次启停，启动异常不会被错误缓存为已启动。Room/SQLite 存储层又在 API 35/API 27 的实际连接上验证了 `PRAGMA query_only = ON` 导致的永久只读写失败与事务保留；物理低存储量化、通知与定位停止/恢复的故障注入、真实 Service 全路径和真实道路长测仍未完成。
 - 系统以 `START_STICKY` 重建 Service 时先升为“正在确认行程存储”前台状态，并等待 `DashboardRuntime.awaitInitialRestore()`；只有恢复完成且存在活动行程时才重启定位，没有活动行程或恢复失败后才停止 Service。
 - 权限请求历史只用于区分首次请求与后续拒绝；Activity 在权限回调、设置返回、`onResume()` 和 Provider 广播后重新读取系统状态。设置返回不自动开始行程，活动行程受阻时停止定位并保留用户结束行程的入口。
 - 整机重启不属于当前 `START_STICKY` 恢复承诺：API 27 实测重启后没有手机版进程、Service、通知或 GPS 注册，打开应用后才显示“已恢复”。当前 Manifest 不注册 `BOOT_COMPLETED`，也不申请 `ACCESS_BACKGROUND_LOCATION`；若未来要求开机自动继续，必须先评审后台位置权限、Android 14 while-in-use 规则、Android 15 `BOOT_COMPLETED` 限制和 Play 政策，再决定是否新增 receiver。
@@ -95,7 +95,7 @@ flowchart LR
 - 数据库写入统一进入单线程后台队列；`TripSessionEventQueue` 固定先恢复，并按 FIFO 串行交付 Start、AppendPoint、Pause、Resume、End、Tick 和 Checkpoint，`TripSessionCoordinator` 负责历史查询和元数据确认。等待型 Start 在确认后同步发布 `DashboardState`；队列关闭或异常会唤醒等待者并拒绝新事件。阻塞式存储调用切到 `Dispatchers.IO`，定位点由存储队列在后台批量落库；读取屏障只观察它之前已经入队的写入。
 - 有效点按最多 16 点或 1 秒组成批次，在单个事务中写入；暂停、结束、读取、已执行的生命周期检查点和正常关闭前强制冲刷尾批次。队列用原子计数预留未确认点名额，磁盘持续不可写时最多保留 16 点，第 17 个点通过 `TripStorageBackpressureException` 同步拒绝，避免定位回调无限堆积内存。正常情况下批次延迟约 1 秒；异常写失败时只保证未确认点数量上限，不保证时间上限。`TripRecordingService.onTaskRemoved()` 在 Service 协程中调用 `DashboardRuntime.checkpointTripWritesAndAwait()`，不阻塞主线程但仍不能阻止系统在协程完成前回收进程。
 - `ActiveTripCheckpoint` 表达数据库确认边界：行程开始时间、确认点数、最后 `sequence` 和最后点时间。队列每次批量事务成功后释放相应内存配额、发布检查点，并保留最近一条供晚到的 Service/Activity 订阅者读取；`TripSessionCoordinator` 将其映射到 `DashboardRuntime`。进入背压时保留活动行程和最后确认检查点，Service 停止 `LocationEngine`、保留前台通知与结束入口；后台重试成功并产生新检查点后清除背压和旧错误，再自动恢复定位。未冲刷点只能更新实时统计，被背压拒绝的点不进入累计器或确认边界。
-- 恢复首点边界：被背压拒绝的点不进入累计器或确认边界，但定位样本缓存与事件队列交付是异步的；正式候选必须断言恢复后的首个有效点不会把被拒绝点作为跨故障连接基准，并核对里程没有跨越存储故障窗口补算。
+- 恢复首点边界：`DashboardRuntime` 在普通存储失败、背压、队列拒绝和已确认会话边界统一清除上一定位样本、平台位置缓存和 `SpeedEstimator` 平滑状态；存储错误未被新检查点确认前，新的回调只更新仪表，不再进入行程累计或存储队列。这样恢复后的首个有效点会以零距离、无旧样本推导速度和新的存储序列开始。JVM `DashboardRuntimePersistenceTest` 已验证普通失败与背压两类 seam；`RoomRuntimeBackpressureInstrumentedTest` 又在 API 35/API 27 的真实 Room 连接上验证 16 点尾批和恢复检查点，但物理 `ENOSPC`、Service 回调竞态和设备级尾批仍需单独验收。
 - 活动行程元数据在开始、暂停和恢复时排队写入；协调器等待写入屏障成功后才发布新模式。历史列表使用结束时间索引。
 - `ActiveTripLoadResult` 显式区分 `Empty`、`Loaded` 和 `Corrupt`。无法识别活动行程 mode 时保留原始行，协调器关闭存储门禁并拒绝开始新行程；迁移失败依赖事务回滚保留原数据库，禁止自动清库。
 - 结束行程在同一事务中先写入已结束统计并迁移活动轨迹点，再清除活动行程；中途失败时优先保留完整可恢复数据。
@@ -109,7 +109,7 @@ flowchart LR
 - 统计：移动/停车边界、暂停、恢复、结束、进程重建和零时长除法。
 - 长行程：十万点增量统计不溢出，`DashboardRuntime` 不持有完整轨迹；Room 千点批量写入后顺序与恢复一致。
 - UI：无权限、仅近似、永久拒绝、系统定位关闭、通知拒绝、无数据、缺海拔、弱定位、过期、超长坐标文本，以及 `Pixel_9` 竖屏安全区和单屏无滚动约束。
-- 服务：Manifest 私有性、`location` 类型、权限声明、显式 Intent 和不可变 `PendingIntent`；`LocationEnginePolicy` 统一区分可见定位预览、Start 等待、已确认活动行程和存储背压，背压优先停止定位。运行时覆盖启动编排确认、失败清理、Home、锁屏、Activity 重建、通知结束与单定位线程；可见页面的定位预览可以在 Start 确认前运行，但 Runtime 仍为 `IDLE` 时不会把样本写入行程。真实低存储测试还必须断言“等待存储恢复”通知、定位注册归零、结束入口保留和检查点恢复后定位重新注册。
+- 服务：Manifest 私有性、`location` 类型、权限声明、显式 Intent 和不可变 `PendingIntent`；`LocationEnginePolicy` 负责计算可见定位预览、Start 等待、已确认活动行程和存储异常的目标动作，`LocationEngineSessionController` 负责把该动作与已执行动作比较后幂等地调用 `LocationEngine.start/stop`。普通失败或背压都优先停止定位；`LocationEngine.start()` 若系统注册失败会回滚部分注册并返回失败，不把失败动作记入控制器缓存。运行时覆盖启动编排确认、失败清理、Home、锁屏、Activity 重建、通知结束与单定位线程；可见页面的定位预览可以在 Start 确认前运行，但 Runtime 仍为 `IDLE` 时不会把样本写入行程。存储失败或队列拒绝时 Runtime 会断开定位分段并重置速度基线；Room/Runtime 连接级专项已覆盖事务失败到背压恢复，真实低存储测试还必须断言“等待存储恢复”通知、定位注册归零、结束入口保留和检查点恢复后定位重新注册。
 - 恢复：用应用自身 UID 向活动行程进程发送 `SIGKILL`，验证系统以 null Intent 重建 `START_STICKY` Service、等待存储、恢复前台通知和单定位线程；`force-stop` 单独建模，不算普通恢复。
 - 升级：使用公开 `v0.2.0` 正式 APK 生成真实 SQLite v3 活动行程，再用同证书候选 APK 覆盖安装，验证 Room v4 迁移、活动状态、点数、距离、确认边界和前台服务恢复；最终发布候选提升版本号后必须重复该流程。
 - 性能：Baseline Profile 以两个独立场景采集：首屏启动进入 Baseline 与 Startup Profile，完整行程场景覆盖开始、Home、Activity/Service 重绑、暂停、继续和结束。Macrobenchmark 在同一 Pixel_9 上同时记录无预编译与强制 Baseline Profile 的冷启动 TTID；模拟器结果只用于相对比较。上一版 Profile 已移除旧 ViewModel 类名并命中新事件队列、Service、定位策略和 Room 热路径；本轮背压改动触及这些热路径，最终候选前必须重新生成并复核。
@@ -134,6 +134,6 @@ flowchart LR
 
 ## 10. 后续迁移边界
 
-M5 跨 API 权限验收已经完成，三档 API 的 30 分钟后台回归和 API 27 整机重启边界也已通过。本轮又补充了点写失败统一失败流、确认边界 replay、任务移除等待、Start 请求清理顺序和 16 点存储背压，并通过 `gps-core` 51/51、手机版 26/26 JVM、完整本地构建，以及 Pixel_9/API 35 与 API 27 各 18 项 instrumentation 回归。剩余工作集中在真实低存储量化、通知与定位停止/恢复设备断言、真实 Service 全路径异常竞态、尾批损失、最终候选升级链、Profile 重采集和真机证据；开机自动恢复属于尚未承诺的独立产品决策，不能只添加 receiver 解决，也不能把这些问题收缩成单一“权限补丁”或“升版本”。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
+M5 跨 API 权限验收已经完成，三档 API 的 30 分钟后台回归和 API 27 整机重启边界也已通过。本轮又补充了点写统一失败流、确认边界 replay、任务移除等待、Start 请求清理顺序、16 点存储背压、普通持久化失败输入阻断、恢复首点分段保护和 Service 定位会话控制器；Room/SQLite 实际连接只读写失败在 API 35/API 27 的存储类各 13/13 通过，Runtime/Room 背压专项各 1/1，完整 `gps-core` 各 14/14，并通过 `gps-core` 53/53、手机版 31/31 JVM（控制器 seam 4/4、策略 seam 7/7）和完整本地构建。剩余工作集中在物理低存储量化、通知与定位停止/恢复设备断言、真实 Service 全路径异常竞态、尾批损失、最终候选升级链、Profile 重采集和真机证据；开机自动恢复属于尚未承诺的独立产品决策，不能只添加 receiver 解决，也不能把这些问题收缩成单一“权限补丁”或“升版本”。完整优先级、依赖关系和验收门槛见 [剩余高风险迁移项](./migration-risks.md)。
 
-M1 已建立可确认的行程状态，并补充同步点写失败不终止会话的失败流；M2 已把定位所有权迁入前台服务；M3 已建立最后确认检查点、16 点未确认上限和 `START_STICKY` 恢复门禁，确认边界支持晚到订阅者读取，任务移除路径可等待尾批确认，并验证 API 27 整机重启后需用户打开应用恢复；M4 已完成 Room schema v4、旧版本显式迁移、损坏状态护栏，以及 API 27/API 29 的公开正式旧包覆盖升级。M5 已通过 Pixel_9 / API 35 和 API 27/29/31/33 的完整位置权限矩阵，API 33 通知拒绝矩阵也已验收；M6 单一事件队列和背压策略已通过 JVM、本地构建及 Pixel_9/API 27 既有 instrumentation，三档 API 还通过了完整 30 分钟常规后台回归。下一步集中完成真实低存储与尾批损失量化、真实 Service 全路径异常竞态、最终候选提升版本号后的覆盖升级复验、Profile 重采集，以及取得单独授权后的真实设备 2 小时长测；若产品决定支持开机自动恢复，另开迁移项评审 `BOOT_COMPLETED` 与后台位置权限；M8 AGP 9 继续独立延后。
+M1 已建立可确认的行程状态，并补充同步点写失败不终止会话的失败流和恢复首点分段保护；M2 已把定位所有权迁入前台服务；M3 已建立最后确认检查点、16 点未确认上限和 `START_STICKY` 恢复门禁，确认边界支持晚到订阅者读取，任务移除路径可等待尾批确认，并验证 API 27 整机重启后需用户打开应用恢复；M4 已完成 Room schema v4、旧版本显式迁移、损坏状态护栏，以及 API 27/API 29 的公开正式旧包覆盖升级。M5 已通过 Pixel_9 / API 35 和 API 27/29/31/33 的完整位置权限矩阵，API 33 通知拒绝矩阵也已验收；M6 单一事件队列、统一 `LocationEngineSessionController` 和背压策略已通过 JVM、本地构建、两档设备完整 `gps-core` 14/14 与手机版 6/6 instrumentation，以及 Runtime/Room 专项 1/1，三档 API 还通过了完整 30 分钟常规后台回归。下一步集中完成真实低存储与尾批损失量化、真实 Service 全路径异常竞态、最终候选提升版本号后的覆盖升级复验、Profile 重采集，以及取得单独授权后的真实设备 2 小时长测；若产品决定支持开机自动恢复，另开迁移项评审 `BOOT_COMPLETED` 与后台位置权限；M8 AGP 9 继续独立延后。

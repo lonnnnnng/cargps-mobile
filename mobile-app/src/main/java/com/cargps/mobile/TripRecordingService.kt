@@ -59,6 +59,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
     private val binder = LocalBinder()
     private lateinit var runtime: DashboardRuntime
     private lateinit var locationEngine: LocationEngine
+    private lateinit var locationSessionController: LocationEngineSessionController
     private lateinit var notificationManager: NotificationManager
     private var stateJob: Job? = null
     private var tickerJob: Job? = null
@@ -76,6 +77,10 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         super.onCreate()
         runtime = (application as CarGpsApplication).dashboardRuntime()
         locationEngine = LocationEngine(this, this)
+        locationSessionController = LocationEngineSessionController(
+            startLocation = locationEngine::start,
+            stopLocation = locationEngine::stop,
+        )
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
         stateJob = serviceScope.launch {
@@ -124,6 +129,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         stateJob?.cancel()
         tickerJob?.cancel()
         recoveryJob?.cancel()
+        locationSessionController.reset()
         locationEngine.close()
         serviceScope.cancel()
         super.onDestroy()
@@ -164,7 +170,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         if (!access.isReady) {
             startRequested = false
             reportBlockedAccess(access)
-            locationEngine.stop()
+            reconcileLocationEngine()
             stopSelf()
             return
         }
@@ -182,7 +188,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
                 awaitStart = runtime::startTripAndAwait,
                 currentAccess = ::currentTripAccessState,
                 onRequestFinished = { startRequested = false },
-                startLocation = locationEngine::start,
+                startLocation = { reconcileLocationEngine() },
                 handleState = ::handleRuntimeState,
             )
         }
@@ -192,7 +198,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         val access = currentTripAccessState()
         if (!access.isReady) {
             reportBlockedAccess(access)
-            locationEngine.stop()
+            reconcileLocationEngine()
             stopSelf()
             return
         }
@@ -202,11 +208,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             return
         }
         if (promoteToForeground(runtime.state.value)) {
-            if (runtime.state.value.storageBackpressure) {
-                locationEngine.stop()
-            } else {
-                locationEngine.start()
-            }
+            reconcileLocationEngine()
         }
     }
 
@@ -231,11 +233,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             when (decideStartedServiceRecovery(restoredState)) {
                 StartedServiceRecoveryAction.RESUME_ACTIVE_TRIP -> {
                     if (currentTripAccessState().isReady && promoteToForeground(restoredState)) {
-                        if (restoredState.storageBackpressure) {
-                            locationEngine.stop()
-                        } else {
-                            locationEngine.start()
-                        }
+                        reconcileLocationEngine(restoredState)
                     }
                 }
                 StartedServiceRecoveryAction.STOP_NO_ACTIVE_TRIP,
@@ -252,30 +250,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
     }
 
     private fun refreshLocationEngine() {
-        val activeTrip = runtime.state.value.tripMode != TripMode.IDLE
-        val access = currentTripAccessState()
-        val sessionPhase = when {
-            activeTrip -> LocationSessionPhase.ACTIVE
-            startRequested -> LocationSessionPhase.START_PENDING
-            else -> LocationSessionPhase.IDLE
-        }
-        when (
-            decideLocationEngineAction(
-                clientVisible = clientVisible,
-                sessionPhase = sessionPhase,
-                access = access,
-                storageBackpressure = runtime.state.value.storageBackpressure,
-            )
-        ) {
-            LocationEngineAction.START -> {
-                runtime.onForegroundServiceError(null)
-                locationEngine.start()
-            }
-            LocationEngineAction.STOP -> {
-                locationEngine.stop()
-                if (!access.isReady) reportBlockedAccess(access)
-            }
-        }
+        reconcileLocationEngine()
         handleRuntimeState(runtime.state.value)
     }
 
@@ -298,22 +273,14 @@ class TripRecordingService : Service(), LocationEngine.Listener {
             lastNotificationDistanceBucket = -1L
         }
 
-        if (activeTrip && state.storageBackpressure) {
-            // 作者：long｜存储尾批达到上限后保留前台服务和结束操作，但暂停定位输入，等待确认检查点恢复。
-            locationEngine.stop()
-        } else if (activeTrip && !access.isReady) {
-            locationEngine.stop()
-            reportBlockedAccess(access)
-        } else if (activeTrip) {
-            locationEngine.start()
-        }
+        reconcileLocationEngine(state, access)
 
         if (activeTrip && !access.isReady && !clientVisible) {
             stopSelf()
         } else if (startCommandReceived && !recoveringStartedService && !activeTrip && !startRequested &&
             !state.tripCommandInProgress && !clientVisible
         ) {
-            locationEngine.stop()
+            reconcileLocationEngine(state, access)
             stopSelf()
         } else if (foreground) {
             updateNotificationIfNeeded(state)
@@ -371,7 +338,7 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         val endTripPendingIntent = endTripPendingIntent(this)
         val statusText = when (state.tripMode) {
             TripMode.IDLE -> "正在确认行程存储"
-            TripMode.RECORDING -> if (state.storageBackpressure) "等待存储恢复" else "正在记录"
+            TripMode.RECORDING -> if (isStorageInputBlocked(state)) "等待存储恢复" else "正在记录"
             TripMode.PAUSED -> "行程已暂停"
         }
         val distanceText = String.format(Locale.CHINA, "%.2f km", state.tripStats.distanceMeters / 1_000.0)
@@ -407,6 +374,33 @@ class TripRecordingService : Service(), LocationEngine.Listener {
         if (access.blocksLocation) runtime.onPermissionRequired()
         runtime.onForegroundServiceError(access.serviceErrorMessage())
     }
+
+    private fun reconcileLocationEngine(
+        state: DashboardState = runtime.state.value,
+        access: TripAccessState = currentTripAccessState(),
+    ): LocationEngineAction {
+        val sessionPhase = when {
+            state.tripMode != TripMode.IDLE -> LocationSessionPhase.ACTIVE
+            startRequested -> LocationSessionPhase.START_PENDING
+            else -> LocationSessionPhase.IDLE
+        }
+        val action = locationSessionController.reconcile(
+            clientVisible = clientVisible,
+            sessionPhase = sessionPhase,
+            access = access,
+            storageBackpressure = state.storageBackpressure,
+            storageFailure = state.storageError != null,
+        )
+        if (action == LocationEngineAction.START) {
+            runtime.onForegroundServiceError(null)
+        } else if (!access.isReady) {
+            reportBlockedAccess(access)
+        }
+        return action
+    }
+
+    private fun isStorageInputBlocked(state: DashboardState): Boolean =
+        state.storageBackpressure || state.storageError != null
 
     companion object {
         internal const val ACTION_START_TRIP = "com.cargps.mobile.action.START_TRIP"

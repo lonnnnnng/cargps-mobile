@@ -81,4 +81,17 @@ class LocationEnginePolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `一般存储失败时也停止定位并等待确认恢复`() {
+        assertEquals(
+            LocationEngineAction.STOP,
+            decideLocationEngineAction(
+                clientVisible = true,
+                sessionPhase = LocationSessionPhase.ACTIVE,
+                access = TripAccessState.Ready,
+                storageFailure = true,
+            ),
+        )
+    }
 }

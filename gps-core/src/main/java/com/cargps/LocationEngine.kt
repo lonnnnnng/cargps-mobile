@@ -88,18 +88,18 @@ class LocationEngine(
     }
 
     @Synchronized
-    fun start() {
+    fun start(): Boolean {
         check(!closed) { "定位引擎已关闭" }
-        if (started) return
+        if (started) return true
         if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) !=
             PackageManager.PERMISSION_GRANTED
         ) {
             listener.onPermissionRequired()
-            return
+            return false
         }
         if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
             listener.onProviderDisabled()
-            return
+            return false
         }
 
         generation.incrementAndGet()
@@ -116,9 +116,11 @@ class LocationEngine(
             locationManager.addNmeaListener(nmeaListener, callbackHandler)
             locationManager.registerGnssStatusCallback(gnssCallback, callbackHandler)
             listener.onSearching()
+            return true
         } catch (_: SecurityException) {
             rollbackFailedStart()
             listener.onPermissionRequired()
+            return false
         } catch (error: RuntimeException) {
             rollbackFailedStart()
             throw error
