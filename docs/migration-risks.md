@@ -2,11 +2,11 @@
 
 作者：long
 
-更新时间：2026-08-08 21:00:35（北京时间，UTC+8）
+更新时间：2026-08-08 21:50:19（北京时间，UTC+8）
 
 ## 1. 当前基线
 
-`v0.2.0` 已完成依赖升级、增量行程统计、定位回调线程化、SQLite 批量写入、R8、Baseline Profile 和 Pixel_9 发布验证。`v0.2.0` 之后的 M1-M6 已完成当前开发线的核心实现；M7 曾在 Pixel_9 重新生成 Baseline/Startup Profile 并完成两轮冷启动对照。2026-08-08 又完成 API 27、API 29、API 31、API 33 的聚焦 instrumentation、运行时回归和完整位置权限矩阵，在 API 27/API 29 完成公开正式 `v0.2.0` 到当前同证书 Release 的 SQLite v3 -> Room v4 覆盖升级，并分别在 Pixel_9 / API 35、Android 10 / API 29、Android 8.1 / API 27 完成 41 个样本、1831/1816/1816 秒的后台回归；API 27 另完成整机重启边界验证。最新开发线进一步把未确认定位点限制为 16 个：磁盘持续不可写时第 17 个点同步拒绝，Service 停止定位输入、保留前台通知和结束入口，成功确认尾批后自动恢复。普通持久化失败也已并入同一输入阻断策略；错误未被新检查点确认前，Service 停止定位注册，Runtime 不再向行程队列投递新点，并清除上一定位样本与速度平滑基线。JVM seam 已验证普通失败与背压两类恢复首点都不跨故障窗口补算距离、速度和确认点序列。新增的 Room/Runtime 专项又在真实 Room 连接上验证了同一故障进入背压链路：Pixel_9/API 35 与 Android 8.1/API 27 专项各 1/1，完整 `gps-core` instrumentation 各 14/14；前 16 点保留、第 17 点拒绝、活动行程不清除，恢复后 16 点检查点确认。事件 actor 未预期终止时现在会关闭入口、停止定位并发布“恢复中/终态失败”；每个 Runtime 最多自动重建一次，新队列先 Restore 已确认存储状态，初始 `START_STICKY` 会等待重建结果。真实 Service 生命周期 seam 在两档设备各 8/8，新增验证 End 前尾点保留、End 后定位拒绝、活动行程 Activity 重建后重绑原 Service 不重复启停定位，以及 actor 第一次异常单次恢复、第二次异常进入终态并拒绝后续行程点；原有 Start 门禁、可见性重绑、可恢复写失败和任务移除 Checkpoint 场景继续通过。当前已通过 `gps-core` 58/58、手机版 33/33 JVM、AndroidTest 编译、lint、lintVital、Debug/Probe/Release、R8、资源压缩和 benchmark 构建；两档设备完整 `gps-core` instrumentation 各 14/14、手机版各 14/14。M1-M7 尚未随新版本发布；Checkpoint 提交前整个进程回收已在双设备量化为 16 点未确认损失窗口，前台 Activity 与 Service 同进程被回收后的“Service 独立恢复 -> 用户返回重绑”也已在 Pixel_9/API 35 与 API 27 验证为唯一进程、唯一 ServiceRecord 和唯一定位线程。仍未完成物理低存储下的通知与真实 GPS 恢复、Profile 重采集、真实设备和最终候选复验。当前开发构建仍沿用 `0.2.0 (3)`，并继续保留 `minSdk = 27`。
+`v0.2.0` 已完成依赖升级、增量行程统计、定位回调线程化、SQLite 批量写入、R8、Baseline Profile 和 Pixel_9 发布验证。`v0.2.0` 之后的 M1-M6 已完成当前开发线的核心实现；M7 已按当前热路径在 Pixel_9/API 35 重新生成 Baseline/Startup Profile 并完成两轮冷启动对照。2026-08-08 又完成 API 27、API 29、API 31、API 33 的聚焦 instrumentation、运行时回归和完整位置权限矩阵，在 API 27/API 29 完成公开正式 `v0.2.0` 到当前同证书 Release 的 SQLite v3 -> Room v4 覆盖升级，并分别在 Pixel_9 / API 35、Android 10 / API 29、Android 8.1 / API 27 完成 41 个样本、1831/1816/1816 秒的后台回归；API 27 另完成整机重启边界验证。最新开发线进一步把未确认定位点限制为 16 个：磁盘持续不可写时第 17 个点同步拒绝，Service 停止定位输入、保留前台通知和结束入口，成功确认尾批后自动恢复。普通持久化失败也已并入同一输入阻断策略；错误未被新检查点确认前，Service 停止定位注册，Runtime 不再向行程队列投递新点，并清除上一定位样本与速度平滑基线。JVM seam 已验证普通失败与背压两类恢复首点都不跨故障窗口补算距离、速度和确认点序列。新增的 Room/Runtime 专项又在真实 Room 连接上验证了同一故障进入背压链路：Pixel_9/API 35 与 Android 8.1/API 27 专项各 1/1，完整 `gps-core` instrumentation 各 14/14；前 16 点保留、第 17 点拒绝、活动行程不清除，恢复后 16 点检查点确认。事件 actor 未预期终止时现在会关闭入口、停止定位并发布“恢复中/终态失败”；每个 Runtime 最多自动重建一次，新队列先 Restore 已确认存储状态，初始 `START_STICKY` 会等待重建结果。真实 Service 生命周期 seam 在两档设备各 8/8，新增验证 End 前尾点保留、End 后定位拒绝、活动行程 Activity 重建后重绑原 Service 不重复启停定位，以及 actor 第一次异常单次恢复、第二次异常进入终态并拒绝后续行程点；原有 Start 门禁、可见性重绑、可恢复写失败和任务移除 Checkpoint 场景继续通过。当前已通过 `gps-core` 58/58、手机版 33/33 JVM、AndroidTest 编译、lint、lintVital、Debug/Probe/Release、R8、资源压缩和 benchmark 构建；两档设备完整 `gps-core` instrumentation 各 14/14、手机版各 14/14。M1-M7 尚未随新版本发布；Checkpoint 提交前整个进程回收已在双设备量化为 16 点未确认损失窗口，前台 Activity 与 Service 同进程被回收后的“Service 独立恢复 -> 用户返回重绑”也已在 Pixel_9/API 35 与 API 27 验证为唯一进程、唯一 ServiceRecord 和唯一定位线程。当前 Profile 为 50,670/49,461 行，已命中新 Service/Runtime/队列热路径并排除旧 ViewModel 与 probe-only 探针；两轮冷启动中位改善为 17.46% 和 24.37%，但模拟器 CPU 未锁定且第二轮波动明显。仍未完成物理低存储下的通知与真实 GPS 恢复、真实设备和最终候选复验。当前开发构建仍沿用 `0.2.0 (3)`，并继续保留 `minSdk = 27`。
 
 ### 1.1 证据分层
 
@@ -17,7 +17,7 @@
 - **已验证（真实 Service 生命周期 seam）**：`TripRecordingServiceLifecycleInstrumentedTest` 在 Pixel_9/API 35 与 API 27 各 8/8，使用真实 Service 和真实 `DashboardRuntime` 验证 Start 存储确认前定位启动次数为 0、确认后只启动一次，Activity 可见性解绑/重绑的启停幂等，活动行程 `ActivityScenario.recreate()` 后只替换 Activity 实例并重绑原 Service，注入式可恢复写失败后通知立即显示“等待存储恢复”、结束入口保留、定位停止并在检查点恢复后只重启一次，任务移除 Checkpoint 在 Service 销毁和等待协程取消后仍由 Runtime 完成，End 前尾点纳入最终事务、End 后到达定位被拒绝，以及 actor 第一次异常从确认状态单次恢复、第二次异常进入终态后不再 Restore 或接收新行程点；存储与系统 GPS 注册由测试边界隔离。
 - **已验证（Checkpoint 提交前进程回收）**：probe-only 探针在真实 `RoomTripStorage + QueuedTripStorage + DashboardRuntime` 的 16 点批次委托事务前阻塞；Pixel_9/API 35 与 API 27 均在应用 UID `SIGKILL` 后以新 PID 恢复 `START_STICKY` 前台 Service，Room 活动状态保持 `RECORDING`、确认点数保持 0，未确认损失窗口精确为 16 点。
 - **已验证（Activity/Service 同进程回收重绑）**：Pixel_9/API 35 与 API 27 均在前台 Activity 和 location Service 共用进程时发送应用 UID `SIGKILL`；Service 先在无 Activity 时独立恢复，用户重新打开应用后 Activity 重绑同一新 PID，进程数、ServiceRecord 和定位线程均保持 1，UI 显示“记录中 / 已恢复”并可正常结束。
-- **未验证（发布阻断）**：物理磁盘 `ENOSPC`/低存储下的通知与真实 GPS 注册停止/恢复、最终候选版本号升级复验、热路径 Profile 重采集和真实设备长测。
+- **未验证（发布阻断）**：物理磁盘 `ENOSPC`/低存储下的通知与真实 GPS 注册停止/恢复、最终候选版本号升级复验和真实设备长测。当前热路径 Profile 已刷新；后续相关代码变化时重新进入门禁。
 
 M2 已消除“Activity 退到后台就主动停止定位”的旧结构。API 27/API 29 已验证开始、Home、单定位线程、普通进程 `SIGKILL` 后 `START_STICKY` 恢复、结束和资源清理；API 31 已验证开始、Home、锁屏、单定位线程、活动行程撤权后的受阻结束和资源清理，但未执行普通进程恢复。Pixel_9 / API 35、Android 10 / API 29 和 Android 8.1 / API 27 已完成 Home、系统设置、锁屏睡眠和解锁返回的完整 30 分钟监测，期间同一 PID、前台服务、活动通知和单定位线程持续，正常结束后资源完整清理。API 27 整机重启边界已补测为“活动数据保留、系统不自动拉起、用户打开应用后恢复”。三档模拟器长测均通过，剩余风险转为低存储、异常竞态、最终候选和真机证据。
 
@@ -33,23 +33,23 @@ M2 已消除“Activity 退到后台就主动停止定位”的旧结构。API 2
 | M4 | P1 | API 27/29 正式升级已验证，待最终候选复验/发版 | Schema 完整性与 Room 迁移 | 当前代码与签名升级链已通过，但开发构建仍和旧包同为 `0.2.0 (3)` | 最终候选版本的升级链已验收，或任意物理损坏都能自动恢复 |
 | M5 | P1 | 跨 API 完整矩阵已验证，待发版 | 权限状态机 | 当前无未完成运行时分支；后续修改 Activity、Service 或权限策略必须重跑完整矩阵 | 已在正式版本交付 |
 | M6 | P1；阻断发版 | API 27/29/35 30 分钟、本地完整关卡、Pixel_9/API 27 完整套件、真实 Service 8/8 seam、M3 提交前进程回收探针和 Activity/Service 同进程回收重绑均已通过；异常环境、低存储与真机待验收 | 生命周期并发与真机长测 | 不可见 Start 等待已禁止后台定位；控制器 4/4 JVM 与 Service 生命周期 8/8 设备 seam 已覆盖确认门禁、重绑幂等、活动行程 Activity 重建重绑、注入式可恢复故障、已排队 Checkpoint、End 前后定位顺序、actor 单次恢复和第二次终态失败；同进程回收后 Service 独立恢复和用户返回重绑也保持唯一进程/Service/定位线程，但真实低存储、系统 GPS 和真实设备仍未完成 | 最后定位点必不丢失或已验证真实道路和长时功耗 |
-| M7 | P1；重新进入候选门禁 | 旧 Profile 已验证，当前热路径改动后待重采集 | Baseline Profile 热路径刷新 | `DashboardRuntime`、Service、定位策略和存储路径已经变化，旧 Profile 不再代表最终候选；无预编译启动仍比 v0.2.0 历史基线慢 | 当前 Profile 已覆盖最终代码、整体启动无回退或模拟器收益等同真机 |
+| M7 | P1；当前刷新已完成 | 当前热路径 Profile 与两轮冷启动对照已完成；后续热路径变化时重新进入候选门禁 | Baseline Profile 热路径刷新 | 第二轮模拟器波动明显，CPU 未锁定；当前结果只证明同一 AVD 的相对收益，不代表真机或整体启动无回退 | 模拟器收益等同真机、架构扩展没有启动成本，或未来代码仍由当前 Profile 覆盖 |
 | M8 | P2 | 延后 | AGP 9 | 构建链仍为 AGP 8.13.2，升级可能引入插件与 R8 差异 | 已迁移到最新构建系统 |
 
 ## 3. 下一版发布阻断摘要
 
-M1-M6 的核心实现已经通过本地关卡、Pixel_9 / API 35，以及 API 27/29/31/33 聚焦验证；最新 Activity 重建重绑和 actor 第二次终态失败加固后又通过完整本地构建，并在 Pixel_9 / API 35 与 API 27 各完成 28 项当前 instrumentation（`gps-core` 14/14 + 手机版 14/14）。M5 跨 API 完整权限矩阵已闭环，API 27/API 29 的公开正式旧包覆盖升级也已完成。API 27/29/35 的 30 分钟后台回归和 API 27 整机重启边界已经通过，但物理低存储、Service 其余异常环境、最终候选身份、真实设备和热路径 Profile 重采集仍未完成，因此还不能直接发版。发布候选至少还要完成以下四组关卡：
+M1-M6 的核心实现已经通过本地关卡、Pixel_9 / API 35，以及 API 27/29/31/33 聚焦验证；最新 Activity 重建重绑和 actor 第二次终态失败加固后又通过完整本地构建，并在 Pixel_9 / API 35 与 API 27 各完成 28 项当前 instrumentation（`gps-core` 14/14 + 手机版 14/14）。M5 跨 API 完整权限矩阵已闭环，API 27/API 29 的公开正式旧包覆盖升级也已完成。API 27/29/35 的 30 分钟后台回归、API 27 整机重启边界和 M7 当前热路径 Profile 刷新已经通过，但物理低存储、Service 其余异常环境、最终候选身份和真实设备仍未完成，因此还不能直接发版。发布候选至少还要完成以下四组关卡：
 
 1. **跨 API 运行时**：Pixel_9 / API 35、Android 10 / API 29、Android 8.1 / API 27 已分别完成 41 个样本、1831/1816/1816 秒的 Home、系统设置、锁屏和解锁返回回归；跨 API 30 分钟门禁已完成，后续转入异常环境验证。
 2. **低存储与事件顺序**：Room 实际连接的永久只读写失败已经验证存储层原子性（API 35/API 27 存储类各 13/13），Runtime/Room 专项在两档设备各 1/1、完整 `gps-core` 各 14/14 验证前 16 点保留、第 17 点拒绝和恢复后检查点确认；真实 Service 8/8 seam 又验证 Start 确认门禁、可见性重绑、活动行程 Activity 重建重绑、注入式可恢复写失败、任务移除 Checkpoint、End 前后定位顺序、actor 单次恢复和第二次终态失败。M3 probe-only 真实 Room 阻塞探针还验证了 Checkpoint 提交前进程回收，并精确量化 16 点未确认损失窗口；另一条双设备脚本验证前台 Activity/Service 同进程回收后 Service 独立恢复、用户返回重绑且不重复定位。仍需制造物理 `ENOSPC`/低存储并接入真实 Room 与系统 GPS 注册，量化停止与恢复耗时，并在该物理故障路径复核恢复首点分段。API 27 整机重启已证明当前边界是“用户打开应用后恢复”，不应写成开机自动继续。
 3. **最终候选身份与升级链**：提升 `versionCode`/`versionName`，生成最终签名 Release；从公开 `v0.2.0` 在 API 27/API 29 覆盖安装，重新核对证书、版本、Room v4、活动行程数据和前台服务恢复。当前同版本号 APK 的成功结果不能替代这一步。
-4. **候选性能与真机**：背压改动触及 `DashboardRuntime`、Service、定位策略和存储热路径，必须重新生成 Baseline/Startup Profile 并复跑冷启动对照；取得单独设备授权后，再完成 Android 12+ 真机和 API 27 环境的 2 小时记录与功耗、温升、ANR、崩溃采集。
+4. **候选性能资产与真机**：当前热路径的 Baseline/Startup Profile 已重新生成并复跑两轮冷启动对照。最终候选需要确认相关热路径与已生成 Profile 一致、Release APK 仍内嵌最新资产；若代码继续变化则重新生成。取得单独设备授权后，再完成 Android 12+ 真机和 API 27 环境的 2 小时记录与功耗、温升、ANR、崩溃采集。
 
 权限最小闭环已经完成：API 27/29/31/33/35 的适用精确/近似、首次/永久拒绝、系统定位关闭/恢复和设置返回均已验收，API 33/35 通知拒绝矩阵也已通过。后续只有相关代码发生变化时才重新进入发布阻断。
 
-性能资产一致性关卡曾在上一版 M1-M6 代码上通过；本轮已经修改 Service、Runtime 和存储热路径，因此该证据现在只保留为历史基线，发布候选必须重新生成并复核。
+性能资产一致性关卡已按当前代码刷新：Baseline/Startup Profile 为 50,670/49,461 行，当前 Service、Runtime、事件队列和定位会话控制器均命中，旧 ViewModel 与 probe-only 探针归零，Release APK 内嵌 4,107/199 字节二进制 Profile。两轮中位改善为 17.46% 和 24.37%；第二轮波动明显且 CPU 未锁定，因此发布候选只能把它作为同一 AVD 的相对证据。后续热路径变化时重新生成并复核。
 
-Room schema 与显式迁移实现已经完成，API 27/29/33 上的 12 个 fixture/事务/损坏门禁 instrumentation 均已通过；API 27/API 29 的公开正式旧包升级也已保留真实数据库证据。Room 只读连接故障用例在 API 35/API 27 存储类各 13/13 通过，Runtime/Room 背压专项各 1/1、完整 `gps-core` 各 14/14，证明连接级永久写失败不会清除已确认活动数据，并能在运行时保留 16 点尾批后恢复检查点，但不等价于物理 `ENOSPC`。API 27/29/35 的 30 分钟结果和 API 27 重启数据保留结果已完成，JVM seam 又补齐了点写失败统一失败流、确认边界 replay、任务移除等待、Start 清理竞态、16 点有界背压、两类取消策略和 actor 单次恢复；真实 Service 8/8 seam 已覆盖注入故障、End 前后定位顺序、活动行程 Activity 重建重绑、actor 单次恢复和第二次终态失败，并证明已排队 Checkpoint 不会随 Service 协程取消而丢弃。M3 probe-only 真实 Room 探针已完成 Checkpoint 提交前进程回收及 16 点损失窗口量化，M6 同进程回收重绑脚本又在 Pixel_9/API 35 与 API 27 证明 Service 独立恢复和用户返回重绑仍保持唯一进程、ServiceRecord 与定位线程。剩余发布风险集中为物理低存储下的真实 Room/系统 GPS 恢复、最终版本号候选是否仍保持同一升级结果、Profile 重采集，以及真实设备 2 小时长测。当前开机自动恢复不是已交付能力；若产品要改变这一边界，必须单独评审后台位置权限和系统启动规则。AGP 9 仍需分阶段推进，不能与异常恢复和最终候选复验塞入同一次架构改动。真实设备测试必须取得单独设备授权；当前模拟器授权不能自动扩展到 Redmi。
+Room schema 与显式迁移实现已经完成，API 27/29/33 上的 12 个 fixture/事务/损坏门禁 instrumentation 均已通过；API 27/API 29 的公开正式旧包升级也已保留真实数据库证据。Room 只读连接故障用例在 API 35/API 27 存储类各 13/13 通过，Runtime/Room 背压专项各 1/1、完整 `gps-core` 各 14/14，证明连接级永久写失败不会清除已确认活动数据，并能在运行时保留 16 点尾批后恢复检查点，但不等价于物理 `ENOSPC`。API 27/29/35 的 30 分钟结果和 API 27 重启数据保留结果已完成，JVM seam 又补齐了点写失败统一失败流、确认边界 replay、任务移除等待、Start 清理竞态、16 点有界背压、两类取消策略和 actor 单次恢复；真实 Service 8/8 seam 已覆盖注入故障、End 前后定位顺序、活动行程 Activity 重建重绑、actor 单次恢复和第二次终态失败，并证明已排队 Checkpoint 不会随 Service 协程取消而丢弃。M3 probe-only 真实 Room 探针已完成 Checkpoint 提交前进程回收及 16 点损失窗口量化，M6 同进程回收重绑脚本又在 Pixel_9/API 35 与 API 27 证明 Service 独立恢复和用户返回重绑仍保持唯一进程、ServiceRecord 与定位线程，M7 当前热路径 Profile 也已重采集并复跑冷启动。剩余发布风险集中为物理低存储下的真实 Room/系统 GPS 恢复、最终版本号候选是否仍保持同一升级结果，以及真实设备 2 小时长测。当前开机自动恢复不是已交付能力；若产品要改变这一边界，必须单独评审后台位置权限和系统启动规则。AGP 9 仍需分阶段推进，不能与异常恢复和最终候选复验塞入同一次架构改动。真实设备测试必须取得单独设备授权；当前模拟器授权不能自动扩展到 Redmi。
 
 ### 当前剩余高风险摘要
 
@@ -59,9 +59,10 @@ Room schema 与显式迁移实现已经完成，API 27/29/33 上的 12 个 fixtu
 | P0 | 最终候选身份与覆盖升级 | API 27/29 已用公开 `v0.2.0` 同证书验证 Room v4 无损迁移 | 提升版本号，生成最终签名 Release，再重复 API 27/API 29 覆盖升级；完成前不能发新版本 |
 | P1 | Service/队列异常竞态 | JVM seam 已覆盖 Start 状态清理、检查点等待、重绑 replay、背压停止、队列取消和 actor 单次恢复策略；真实 Service seam 在 API 35/API 27 各 8/8 覆盖 Start 确认门禁、可见性重绑、活动行程 Activity 重建重绑、注入式故障恢复、已排队 Checkpoint、End 前后定位顺序、actor 自动恢复和第二次终态失败；M3 探针覆盖提交前进程回收；M6 脚本覆盖前台 Activity/Service 同进程回收、Service 独立恢复和用户返回重绑；三档常规 30 分钟已通过 | 生命周期/进程重绑主路径已闭环；当前 M6 发布阻断收敛为物理低存储/真实 GPS 恢复的设备集成测试与真机长测 |
 | P1 | 真实设备 2 小时长测 | 目前只有受控模拟器证据 | 取得单独设备授权后在 Android 12+ 真机和 API 27 环境采集完整率、功耗、温升、ANR、崩溃；不能把 Redmi 授权默认视为已取得 |
-| P1 | Profile 与启动性能复验 | 旧 Profile 在上一版热路径上有效，两轮模拟器中位改善约 17.4%/18.2% | 当前 Service/Runtime/存储热路径已变化，重新生成 Baseline/Startup Profile、检查旧类归零和新路径命中，并复跑同 AVD 冷启动对照 |
 | P1（产品决策） | 开机自动恢复定位 | API 27 已验证当前不自动拉起、打开应用后可恢复 | 若要改成自动继续，需新增 receiver、后台位置权限/Play 政策评审和 API 29/34/35/厂商电源测试；当前产品不以此阻断发布 |
 | P2 | AGP 9 | 已决定延后，当前 AGP 8.13.2 稳定 | 独立分支迁移，完成 API 27、R8、Profile 和发布链回归；不与运行时风险混合 |
+
+M7 Profile 不再是当前未完成项：当前热路径已重采集、旧类与 probe-only 类已归零、Release 二进制资产已更新，并完成两轮同 AVD 冷启动对照。它保留为条件性门禁：启动、Service、Runtime、事件队列、定位策略或存储热路径一旦变化，就必须重新生成和复测。
 
 P0 低存储项仍包括设备级恢复首点的定位分段校验：Room/SQLite 只读连接测试和 Runtime/Room 专项已证明连接级失败不会清除已确认数据，前 16 点可保留并在恢复后确认，JVM `DashboardRuntimePersistenceTest` 已证明被拒绝样本不会成为恢复后第一点的连接基准，Service seam 已验证注入故障的通知与定位编排；但物理 `ENOSPC`、复杂 Service 回调竞态和真实系统 GPS 停止/恢复仍需设备证据。
 
@@ -210,12 +211,14 @@ API 31 完整位置矩阵证据：新增 `CarGPS_Pixel_9_API31 / Google APIs ARM
 落地状态：
 
 - `generateStartup` 只采集授权后的稳定首屏并设置 `includeInStartupProfile = true`；`generateCriticalUserJourneys` 覆盖开始、Home、返回重绑 Service、暂停、继续和结束确认。
-- 上一版热路径在 Pixel_9 / API 35 生成 Baseline Profile 50,591 行、Startup Profile 49,417 行；旧 `DashboardViewModel` 与 Factory 命中为 0，当时的 Runtime、事件队列、Service、定位策略和 Room 路径均已命中。
-- 当前 Release APK 仍内含 `assets/dexopt/baseline.prof` 与 `baseline.profm`，但内容来自本轮背压改动前的生成结果，不能视为最终候选 Profile。
-- 两轮 5 次冷启动对照中，Baseline Profile 中位数分别从 306.48ms 降至 253.11ms、从 312.96ms 降至 256.06ms，改善约 17.4% 和 18.2%。
-- 当前无预编译中位仍慢于 v0.2.0 历史 241.9ms，不能把 Profile 收益解释为架构扩展没有启动成本；模拟器数据也不能替代真机性能结论。
+- 当前热路径在 Pixel_9 / API 35 生成 Baseline Profile 50,670 行，SHA-256 为 `2ffcdf653d0927e59c9b6b6cfaec29f2b295cb1984e08af3cdad03778d0a6e65`；Startup Profile 49,461 行，SHA-256 为 `a0ba24f26f8388a88104c53128040f18655899f6594567a8487e0db1fb9fdf95`。
+- Baseline/Startup 命中：`LocationEngineSessionController` 6/6、`DashboardRuntime` 75/64、`TripSessionEventQueue` 46/31、`TripRecordingService` 134/88；旧 `DashboardViewModel`、Factory 与 probe-only `M3CheckpointProbeService` 均为 0/0。
+- 当前 Release APK 内含 `assets/dexopt/baseline.prof` 4,107 字节与 `baseline.profm` 199 字节，证明生成文本已进入正式变体的二进制性能资产。
+- 第一轮 5 次冷启动中，无预编译最小/中位/最大为 237.86/244.03/296.16ms，Baseline Profile 为 192.59/201.43/209.11ms，中位改善 17.46%。原始 JSON SHA-256 为 `4963bff7a11198f4464bb8f44100bc551e1cb03827cbe4d47a28372f5c0579cd`。
+- 第二轮无预编译为 316.91/393.52/626.60ms，Baseline Profile 为 158.63/297.62/336.57ms，中位改善 24.37%。原始 JSON SHA-256 为 `687e769211f6c6fcf60a805f9ce433e45207a5d52c85d0d849a03a99ed625b93`。
+- 第二轮波动明显，设备上下文为 `cpuLocked=false` 且未启用持续性能模式。当前数据只能说明同一 Pixel_9 AVD 上的相对收益，不能替代真机绝对性能，也不能证明运行时架构扩展整体没有启动成本。
 
-当前结论：上述结果是本轮背压改动前的历史基线。本轮已经修改 `DashboardRuntime`、`TripRecordingService`、`LocationEnginePolicy`、`TripSessionCoordinator` 和 `QueuedTripStorage`，发布候选必须重新采集 Profile，确认新背压路径命中、旧类名仍归零、APK 二进制 Profile 更新，并在同一 Pixel_9 AVD 重跑冷启动对照。
+当前结论：M7 当前热路径刷新已完成，不再是现有代码的发布缺口。最终候选需要确认启动、Service、Runtime、事件队列、定位策略和存储热路径未再变化，且 APK 仍内嵌上述资产；任一相关代码变化都必须重新采集、检查旧类/probe-only 类归零并复跑同 AVD 冷启动对照。
 
 ### M8 AGP 9
 
@@ -225,6 +228,6 @@ AGP 9 属于构建链迁移，不是当前最紧迫的运行时风险。应在 M
 
 ## 5. 发布门禁
 
-下一发布候选必须先通过第 3 节剩余异常、性能与身份关卡，并完成取得单独设备授权后的真实设备 2 小时长测。即使通过，发布说明仍必须保留以下边界：API 27/29/35 的 30 分钟结果不代表物理低存储或真机；Room 只读连接与 Runtime/Room 背压专项只证明连接级永久写失败、16 点有界保留和检查点恢复，不证明设备 `ENOSPC` 零丢点；M3 提交前进程回收探针已证明 16 个未确认点可以全部丢失，这一结果也不等于设备低存储损失率；API 27 整机重启只证明活动数据保留、用户打开后恢复，不代表开机自动继续；模拟器性能不代表真机；事件队列只保证单进程内顺序；恢复上限是最后确认检查点而非零丢点；`force-stop`、断电和物理低存储仍不属于已验证零丢点范围；当前已验证 API 27/API 29 的公开正式旧包迁移和 API 27/29/31/33/35 完整权限矩阵，但最终提升版本号后的候选、Profile 和物理低存储门禁仍未完成。AGP 9 继续延后，不与异常恢复和最终候选门禁合并。
+下一发布候选必须先通过第 3 节剩余异常、性能资产一致性与身份关卡，并完成取得单独设备授权后的真实设备 2 小时长测。即使通过，发布说明仍必须保留以下边界：API 27/29/35 的 30 分钟结果不代表物理低存储或真机；Room 只读连接与 Runtime/Room 背压专项只证明连接级永久写失败、16 点有界保留和检查点恢复，不证明设备 `ENOSPC` 零丢点；M3 提交前进程回收探针已证明 16 个未确认点可以全部丢失，这一结果也不等于设备低存储损失率；API 27 整机重启只证明活动数据保留、用户打开后恢复，不代表开机自动继续；模拟器性能不代表真机；事件队列只保证单进程内顺序；恢复上限是最后确认检查点而非零丢点；`force-stop`、断电和物理低存储仍不属于已验证零丢点范围；当前已验证 API 27/API 29 的公开正式旧包迁移、API 27/29/31/33/35 完整权限矩阵和当前热路径 Profile 刷新，但最终提升版本号后的候选、物理低存储和真机门禁仍未完成。若最终候选前热路径变化，Profile 必须重新生成。AGP 9 继续延后，不与异常恢复和最终候选门禁合并。
 
 每完成一个迁移项，应同步更新本文件状态、技术设计、测试基线和发布说明，并把对应自动化与设备证据放到 `artifacts/`，不能只修改计划文字。

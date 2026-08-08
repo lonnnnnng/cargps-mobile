@@ -69,4 +69,4 @@ ANDROID_SERIAL=emulator-5556 ./gradlew \
 - 物理磁盘 `ENOSPC`/低存储下，真实 Room、系统 GPS 注册停止与恢复耗时仍未验证。
 - 后续 [M3 Checkpoint 提交前进程回收验证](./m3-checkpoint-process-kill-validation.md) 已在 Pixel_9/API 35 与 API 27 使用 probe-only 真实 Room 阻塞探针补齐：系统以新 PID 恢复 `START_STICKY` Service，但 16 个未确认点全部丢失、确认点数保持 0。该结论明确恢复上限，不代表断电、`force-stop` 或物理低存储零丢点。
 - 本轮 instrumentation 只覆盖“活动行程中的 Activity 重建并重绑现有 Service”；后续 [M6 Activity 与 Service 同进程回收重绑验证](./m6-process-recreation-rebind-validation.md) 已在 Pixel_9/API 35 与 API 27 补齐前台 Activity 与 Service 同进程 `SIGKILL`、Service 独立恢复和用户返回重绑，且两端均保持唯一进程、唯一 Service 与唯一定位线程。该证据仍不代表所有厂商任务栈或物理低存储/GPS 故障。
-- 最终候选仍需提升版本号、重跑同签名覆盖升级、重采集 Profile，并在取得单独设备授权后完成真实设备 2 小时长测。
+- M7 已按当前热路径重采集 Profile 并完成两轮 Pixel_9 相对冷启动对照。最终候选仍需提升版本号、重跑同签名覆盖升级，并在取得单独设备授权后完成真实设备 2 小时长测；若热路径继续变化，Profile 重新进入门禁。

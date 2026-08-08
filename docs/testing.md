@@ -2,7 +2,7 @@
 
 作者：long
 
-更新日期：2026-08-08 21:00:35（北京时间，UTC+8）
+更新日期：2026-08-08 21:50:19（北京时间，UTC+8）
 
 ## 测试分层
 
@@ -205,12 +205,14 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 ## M7 Baseline Profile 与冷启动对照
 
 - `BaselineProfileGenerator` 拆成两个独立采集场景：`generateStartup` 只采集授权后稳定首屏并写入 Startup Profile；`generateCriticalUserJourneys` 覆盖开始行程、Home、返回重绑 Service、暂停、继续和结束确认，不把完整行程规则全部标成启动布局。
-- `Pixel_9 / emulator-5554 / API 35` 的 `generateReleaseBaselineProfile` 成功：Baseline Profile 50,591 行，Startup Profile 49,417 行；`DashboardViewModel`、`DashboardViewModelFactory` 命中均为 0。
-- 上一版 Profile 命中 `DashboardRuntime`、`TripSessionEventQueue`、`TripRecordingService`、`LocationEnginePolicy`、`TripStartOrchestrator` 和 `RoomTripStorage`；当前 Release APK 仍内含 `assets/dexopt/baseline.prof`（4,224 字节）与 `baseline.profm`（199 字节），但背压改动触及这些热路径，不能把这组文件当作最终候选证据。
-- 冷启动第一轮：无预编译最小/中位/最大为 278.02/306.48/333.31ms；强制 Baseline Profile 为 244.77/253.11/445.35ms，中位改善约 17.4%，但存在一次明显离群点。
-- 冷启动第二轮：无预编译最小/中位/最大为 270.18/312.96/345.67ms；强制 Baseline Profile 为 228.74/256.06/338.91ms，中位改善约 18.2%。原始 JSON 保存在本地 `artifacts/cargps-mobile-m7-startup-benchmark-run1.json` 和 `run2.json`。
-- `v0.2.0` 历史无预编译中位为 241.9ms；上一版 M1-M6 无预编译中位约 306-313ms，说明运行时架构扩展带来启动成本。旧 Profile 能显著回收当时构建的启动开销，但本轮背压改动后必须重新采集，不能据此宣称当前候选整体启动无回退。
-- 上述数据来自未锁 CPU 的模拟器，只能作为同一 Pixel_9 AVD 的相对证据，不能外推真机绝对性能。
+- `Pixel_9 / emulator-5554 / API 35` 的当前热路径 `generateReleaseBaselineProfile` 成功：Baseline Profile 50,670 行，SHA-256 为 `2ffcdf653d0927e59c9b6b6cfaec29f2b295cb1984e08af3cdad03778d0a6e65`；Startup Profile 49,461 行，SHA-256 为 `a0ba24f26f8388a88104c53128040f18655899f6594567a8487e0db1fb9fdf95`。
+- Baseline/Startup 命中统计：`LocationEngineSessionController` 6/6、`DashboardRuntime` 75/64、`TripSessionEventQueue` 46/31、`TripRecordingService` 134/88。已删除的 `DashboardViewModel`、`DashboardViewModelFactory` 与 probe-only `M3CheckpointProbeService` 均为 0/0，证明正式性能资产没有把旧架构或探针入口带回热路径。
+- Release APK 内含 `assets/dexopt/baseline.prof`（4,107 字节）和 `baseline.profm`（199 字节）。Profile 刷新前的 50,591/49,417 行及 17.4%/18.2% 数据只保留为历史基线，不再代表当前代码。
+- 刷新后第一轮：无预编译最小/中位/最大为 237.86/244.03/296.16ms；强制 Baseline Profile 为 192.59/201.43/209.11ms，中位改善 17.46%。原始 JSON 为 `artifacts/cargps-mobile-m7-refresh-startup-benchmark-run1.json`，SHA-256 为 `4963bff7a11198f4464bb8f44100bc551e1cb03827cbe4d47a28372f5c0579cd`。
+- 刷新后第二轮：无预编译最小/中位/最大为 316.91/393.52/626.60ms；强制 Baseline Profile 为 158.63/297.62/336.57ms，中位改善 24.37%。原始 JSON 为 `artifacts/cargps-mobile-m7-refresh-startup-benchmark-run2.json`，SHA-256 为 `687e769211f6c6fcf60a805f9ce433e45207a5d52c85d0d849a03a99ed625b93`。
+- 第二轮无预编译和 Profile 两组的离散度都明显增大；设备上下文还记录 `cpuLocked=false`、`sustainedPerformanceModeEnabled=false`。因此两轮只证明当前 Profile 在同一 Pixel_9 AVD 上具有相对收益，不能外推真机绝对性能，也不能据此宣称架构扩展整体没有启动成本。
+- Profile 与文档同步后再次运行完整本地关卡，结果为 `BUILD SUCCESSFUL in 4s`；308 个 actionable tasks 中 3 个执行、305 个保持最新。该关卡覆盖 JVM、AndroidTest 编译、lint、lintVital、Debug/Probe/Release、R8、资源压缩和 benchmark 构建，不连接任何 Android 设备。
+- 当前 M7 刷新已完成；后续若修改启动、Service、Runtime、队列、定位策略或存储热路径，必须重新生成 Baseline/Startup Profile、复核旧类与 probe-only 类仍为 0，并重跑同 AVD 冷启动对照。
 
 ## 2026-08-08 跨 API 27/29/31/33 聚焦回归
 
@@ -244,4 +246,4 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 对齐与优化：Build Tools 36 的 `zipalign -c -P 16 4` 通过；APK 内含 `assets/dexopt/baseline.prof` 和 `baseline.profm`。
 - 安装：正式包在 `Pixel_9` / API 35 冷启动成功；UI 树滚动节点为 0，crash buffer 为空。切换 debug 到 release 签名时仅清除了该模拟器内的测试数据。
 
-Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台记录已经完成，API 27 整机重启边界也已完成验证；最新普通存储失败输入阻断、恢复首点分段、Room/SQLite 只读连接故障、Runtime/Room 背压链路、两类队列取消语义、actor 单次恢复与第二次终态失败均已通过，当前完整 JVM 为 `gps-core` 58/58、手机版 33/33，存储类为 13/13，Runtime/Room 专项在 API 35/API 27 各 1/1，完整 `gps-core` 各 14/14、手机版各 14/14。Service 生命周期 seam 在两档设备各 8/8 通过，新增覆盖活动行程 Activity 重建后重绑原 Service 不重复启停定位，以及 actor 第二次异常进入终态、不再循环重建。Checkpoint 完成前进程回收已由 probe-only 真实 Room 探针在两端完成，新 PID 恢复成功且 16 点未确认损失窗口已精确量化；前台 Activity/Service 同进程回收后的 Service 独立恢复和用户返回重绑也已在两端通过，进程、ServiceRecord 和定位线程均保持唯一。尚未完成的物理低存储、真实 GPS 注册、Profile 重采集、最终候选版本号与签名升级复验和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用常规长测、注入式故障或本轮进程回收结果替代物理异常环境门槛。当前不支持的“开机自动恢复”另需产品决策和权限迁移评审。
+Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台记录已经完成，API 27 整机重启边界也已完成验证；最新普通存储失败输入阻断、恢复首点分段、Room/SQLite 只读连接故障、Runtime/Room 背压链路、两类队列取消语义、actor 单次恢复与第二次终态失败均已通过，当前完整 JVM 为 `gps-core` 58/58、手机版 33/33，存储类为 13/13，Runtime/Room 专项在 API 35/API 27 各 1/1，完整 `gps-core` 各 14/14、手机版各 14/14。Service 生命周期 seam 在两档设备各 8/8 通过，新增覆盖活动行程 Activity 重建后重绑原 Service 不重复启停定位，以及 actor 第二次异常进入终态、不再循环重建。Checkpoint 完成前进程回收已由 probe-only 真实 Room 探针在两端完成，新 PID 恢复成功且 16 点未确认损失窗口已精确量化；前台 Activity/Service 同进程回收后的 Service 独立恢复和用户返回重绑也已在两端通过，进程、ServiceRecord 和定位线程均保持唯一。M7 当前热路径 Profile 已重采集并完成两轮冷启动对照。尚未完成的物理低存储、真实 GPS 注册、最终候选版本号与签名升级复验和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用常规长测、注入式故障、模拟器性能或本轮进程回收结果替代物理异常环境和真机门槛。后续热路径变化必须重新生成 Profile；当前不支持的“开机自动恢复”另需产品决策和权限迁移评审。

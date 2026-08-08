@@ -32,6 +32,8 @@
 - `cargps-mobile-storage-readonly-summary.md`：在 Room 实际打开的 SQLite 连接上执行 `PRAGMA query_only = ON` 后，Pixel_9/API 35 与 Android 8.1/API 27 的存储类各 13/13 通过；批量写失败时活动行程、已确认点和检查点保留且没有部分批次。该证据不等价于物理 `ENOSPC`。
 - `cargps-mobile-runtime-backpressure-summary.md`：通过真实 Room 连接把只读故障推进到 `QueuedTripStorage -> DashboardRuntime`，Pixel_9/API 35 与 Android 8.1/API 27 专项用例各 1/1、完整 `gps-core` instrumentation 各 14/14；验证前 16 点保留、第 17 点拒绝、活动行程不清除、恢复后 16 点检查点确认。该证据仍不等价于物理 `ENOSPC` 或完整 `TripRecordingService` 设备路径。
 - `cargps-mobile-controller-instrumentation-20260808.md`：控制器接入和 `LocationEngine.start()` 失败回滚后的双设备完整 instrumentation 摘要；Pixel_9/API 35 与 Android 8.1/API 27 各为 `gps-core` 14/14、手机版 6/6。该摘要明确区分本轮完整套件与此前 Runtime/Room 背压专项证据。
+- `cargps-mobile-m7-refresh-startup-benchmark-run1.json`：当前热路径 Profile 刷新后的第一轮 Pixel_9 冷启动对照；无预编译中位 244.03ms，Baseline Profile 中位 201.43ms，改善 17.46%，SHA-256 为 `4963bff7a11198f4464bb8f44100bc551e1cb03827cbe4d47a28372f5c0579cd`。
+- `cargps-mobile-m7-refresh-startup-benchmark-run2.json`：第二轮对照；无预编译中位 393.52ms，Baseline Profile 中位 297.62ms，改善 24.37%，SHA-256 为 `687e769211f6c6fcf60a805f9ce433e45207a5d52c85d0d849a03a99ed625b93`。该轮波动明显，且设备未锁 CPU，只能用于同一 AVD 相对比较。
 - `cargps-mobile-api35-30min-recording.xml`、`cargps-mobile-api35-end-confirm.xml`、`cargps-mobile-api35-30min-ended.xml`：长测结束时仍在记录、结束确认和历史增加后的 UI 树。
 - `release-v0.2.0/CarGPS-Mobile-v0.2.0.apk`：`0.2.0 (3)` 正式签名 APK，SHA-256 为 `8fc1238c1fdc45db0e49d3d78243abdfe834fe15e87008e53004ae3eea366bc2`。
 - `release-v0.2.0/Pixel_9-v0.2.0.png`、`Pixel_9-v0.2.0.xml`：正式包安装后的 Pixel_9 画面和 UI 树，滚动节点数量为 0。
@@ -45,7 +47,7 @@
 
 发布目录中的校验文件只列 `CarGPS-Mobile-*.apk`。移动或替换 APK 后必须重新运行 SHA-256 校验，不能把旧摘要当作新构建证据。
 
-M2 早期一次 30 分钟后台监测在第 5 个一分钟样本后被外部 `force-stop` 中断；系统退出记录为 `USER REQUESTED / FORCE STOP`，crash buffer 为空。该次监测既不计为通过，也不计为应用崩溃。2026-08-08 已重新完成 Pixel_9 / API 35 的 41 个样本、1831 秒回归、Android 10 / API 29 的 41 个样本、1816 秒回归，以及 Android 8.1 / API 27 的 41 个样本、1816 秒回归；随后 API 27 完成整机重启边界验证：活动行程保留，但系统不自动拉起手机版 Service，打开应用后恢复。当前存储类已在 Room/SQLite 真实只读连接上通过 13/13，Runtime/Room 背压专项用例和完整 `gps-core` instrumentation 又在 API 35/API 27 各通过 1/1、14/14；这些只是连接级故障证据，仍没有物理低存储截图、通知/GPS 停止恢复、尾批损失量化产物，真实道路长测也仍未完成。
+M2 早期一次 30 分钟后台监测在第 5 个一分钟样本后被外部 `force-stop` 中断；系统退出记录为 `USER REQUESTED / FORCE STOP`，crash buffer 为空。该次监测既不计为通过，也不计为应用崩溃。2026-08-08 已重新完成 Pixel_9 / API 35 的 41 个样本、1831 秒回归、Android 10 / API 29 的 41 个样本、1816 秒回归，以及 Android 8.1 / API 27 的 41 个样本、1816 秒回归；随后 API 27 完成整机重启边界验证：活动行程保留，但系统不自动拉起手机版 Service，打开应用后恢复。当前存储类已在 Room/SQLite 真实只读连接上通过 13/13，Runtime/Room 背压专项用例和完整 `gps-core` instrumentation 又在 API 35/API 27 各通过 1/1、14/14；M3 probe-only 真实 Room 探针已经把 Checkpoint 提交前的尾批损失量化为 16 点，M6 外部脚本也闭环了 Activity/Service 同进程回收重绑。仍没有物理低存储截图、通知/GPS 停止恢复或真实道路长测产物。
 
 API 35 长测期间 PID 始终为 `4395`、前台服务持续、`cargps-location` 线程始终为 1、crash buffer 始终为 0；锁屏进入 `Dozing/Asleep` 后仍持续记录。正常结束后历史从 0 段增加为 1 段，Home 后 Service、活动通知和定位线程均归零，GPS provider 为 `OFF` 并记录应用注销事件。
 

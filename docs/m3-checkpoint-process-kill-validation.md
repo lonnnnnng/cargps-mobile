@@ -42,4 +42,4 @@ Pixel_9 的 `ApplicationExitInfo` 记录旧 PID `2786` 为 `reason=SIGNALED`、`
 - 已验证：整个进程在 16 点批次提交前被杀时，系统能以新 PID 重建 `START_STICKY` Service，活动行程仍为 `RECORDING`，恢复上限是最近确认检查点。
 - 已量化：本场景中数据库确认点数为 0，16 个已接受但未提交的点全部丢失；这与当前 `MAX_PENDING_POINT_COUNT = 16` 的内存上限一致。
 - 未改变产品语义：正常批次仍约 1 秒确认；异常写失败只保证未确认点数量有界，不保证零丢点或时间上限。
-- Activity 前台与 Service 同进程被回收后的“Service 独立恢复、用户返回重绑”已由 [M6 同进程回收重绑验证](./m6-process-recreation-rebind-validation.md) 在 Pixel_9/API 35 与 API 27 补齐。仍未验证物理 `ENOSPC`、真实系统 GPS 注册停止/恢复、断电、`force-stop`、最终候选签名升级、Profile 重采集和真实设备 2 小时长测。
+- Activity 前台与 Service 同进程被回收后的“Service 独立恢复、用户返回重绑”已由 [M6 同进程回收重绑验证](./m6-process-recreation-rebind-validation.md) 在 Pixel_9/API 35 与 API 27 补齐。M7 当前热路径 Profile 也已在 Pixel_9/API 35 重采集并完成两轮相对冷启动对照；后续热路径变化时必须重新生成。仍未验证物理 `ENOSPC`、真实系统 GPS 注册停止/恢复、断电、`force-stop`、最终候选签名升级和真实设备 2 小时长测。
