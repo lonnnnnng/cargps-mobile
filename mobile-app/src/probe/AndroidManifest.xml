@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <application>
+        <!-- 作者：long｜仅 probe APK 暴露给本地破坏性验证脚本，普通 Debug 与正式 Release 均不合并该组件。 -->
+        <service
+            android:name=".M3CheckpointProbeService"
+            android:exported="true"
+            android:foregroundServiceType="dataSync" />
+        <!-- 作者：long｜仅 probe APK 允许 shell 以系统豁免启动 location FGS；普通 Debug 与正式 Manifest 仍为 exported=false。 -->
+        <service
+            android:name=".TripRecordingService"
+            android:exported="true"
+            tools:replace="android:exported" />
+    </application>
+</manifest>

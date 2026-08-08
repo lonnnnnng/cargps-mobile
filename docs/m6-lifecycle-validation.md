@@ -2,7 +2,7 @@
 
 作者：long
 
-验证时间：2026-08-08 18:49:57（北京时间，UTC+8）
+更新时间：2026-08-08 20:25:41（北京时间，UTC+8）
 
 ## 验证范围
 
@@ -67,6 +67,6 @@ ANDROID_SERIAL=emulator-5556 ./gradlew \
 ## 尚未关闭的风险
 
 - 物理磁盘 `ENOSPC`/低存储下，真实 Room、系统 GPS 注册停止与恢复耗时仍未验证。
-- Checkpoint 完成前整个进程被回收时仍只能按最近确认边界恢复；进程终止前后的尾批损失尚未量化。
+- 后续 [M3 Checkpoint 提交前进程回收验证](./m3-checkpoint-process-kill-validation.md) 已在 Pixel_9/API 35 与 API 27 使用 probe-only 真实 Room 阻塞探针补齐：系统以新 PID 恢复 `START_STICKY` Service，但 16 个未确认点全部丢失、确认点数保持 0。该结论明确恢复上限，不代表断电、`force-stop` 或物理低存储零丢点。
 - 本轮验证覆盖“活动行程中的 Activity 重建并重绑现有 Service”，不等价于 Activity 与 Service 进程同时复杂重建的全部竞态。
 - 最终候选仍需提升版本号、重跑同签名覆盖升级、重采集 Profile，并在取得单独设备授权后完成真实设备 2 小时长测。

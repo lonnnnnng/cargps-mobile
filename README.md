@@ -16,6 +16,7 @@ mobile/
 ├── docs/
 ├── gradle/
 ├── gradlew
+├── scripts/       # 只允许目标模拟器的 M3 破坏性验证脚本
 └── settings.gradle.kts
 ```
 
@@ -27,7 +28,7 @@ mobile/
 - Git 提交：`0995eb2`
 - 安装包：`CarGPS-Mobile-v0.2.0.apk`，版本 `0.2.0 (3)`
 - SHA-256：`8fc1238c1fdc45db0e49d3d78243abdfe834fe15e87008e53004ae3eea366bc2`
-- 当前开发线：`v0.2.0` 之后的 M1-M7；API 27/29/31/33 聚焦回归和跨版本位置权限矩阵均已通过，Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台回归也已通过；API 27 整机重启已验证为“活动数据保留、用户打开应用后恢复”。最新存储背压加固把未确认点限制为 16 个，达到上限后停止定位输入并等待磁盘恢复；普通持久化失败、背压和队列拒绝现在都会停止新的定位输入、断开 Runtime 的上一定位样本并重置速度平滑基线，恢复首点不会沿用故障窗口前的距离/速度。`RoomTripStorage` 又在 Pixel_9/API 35 与 Android 8.1/API 27 的真实 Room/SQLite 连接上验证了永久只读写失败，并通过 `QueuedTripStorage -> DashboardRuntime` 专项背压链路测试：前 16 点保留、第 17 点拒绝、恢复后 16 点检查点确认。行程 actor 未预期终止时会关闭旧入口、停止定位并显示可见错误；每个 Runtime 最多自动重建一次队列，新队列先 Restore 已确认存储状态，`START_STICKY` 初始恢复会等待该过程完成。真实 Service seam 已验证 End 前尾点保留、End 后定位拒绝、活动行程 Activity 重建后重绑原 Service 不重复注册定位，以及 actor 第一次异常单次恢复、第二次异常进入终态且拒绝后续行程点；它仍不等价于物理磁盘 `ENOSPC`、真实系统 GPS 故障或 Activity/Service 进程同时复杂重建。当前已通过 `gps-core` 58/58、手机版 33/33 JVM、AndroidTest 编译和完整本地构建；两档设备完整 `gps-core` instrumentation 各 14/14，手机版各 14/14。
+- 当前开发线：`v0.2.0` 之后的 M1-M7；API 27/29/31/33 聚焦回归和跨版本位置权限矩阵均已通过，Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台回归也已通过；API 27 整机重启已验证为“活动数据保留、用户打开应用后恢复”。最新存储背压加固把未确认点限制为 16 个，达到上限后停止定位输入并等待磁盘恢复；普通持久化失败、背压和队列拒绝现在都会停止新的定位输入、断开 Runtime 的上一定位样本并重置速度平滑基线，恢复首点不会沿用故障窗口前的距离/速度。`RoomTripStorage` 又在 Pixel_9/API 35 与 Android 8.1/API 27 的真实 Room/SQLite 连接上验证了永久只读写失败，并通过 `QueuedTripStorage -> DashboardRuntime` 专项背压链路测试：前 16 点保留、第 17 点拒绝、恢复后 16 点检查点确认。行程 actor 未预期终止时会关闭旧入口、停止定位并显示可见错误；每个 Runtime 最多自动重建一次队列，新队列先 Restore 已确认存储状态，`START_STICKY` 初始恢复会等待该过程完成。真实 Service seam 已验证 End 前尾点保留、End 后定位拒绝、活动行程 Activity 重建后重绑原 Service 不重复注册定位，以及 actor 第一次异常单次恢复、第二次异常进入终态且拒绝后续行程点。新增 probe-only 真实 Room 阻塞探针又在 Pixel_9/API 35 与 API 27 量化了 Checkpoint 提交前的整个进程回收：系统以新 PID 恢复前台 Service，活动行程仍为 `RECORDING`，但 16 个未确认点全部丢失、确认点数保持 0；该结果仍不等价于物理磁盘 `ENOSPC`、真实系统 GPS 故障或 Activity/Service 进程同时复杂重建。当前已通过 `gps-core` 58/58、手机版 33/33 JVM、AndroidTest 编译和完整本地构建；两档设备完整 `gps-core` instrumentation 各 14/14，手机版各 14/14。
 - API 27/API 29 已完成公开正式 `v0.2.0` 到当前同签名 Release 的覆盖升级，活动行程从 SQLite v3 无损迁移到 Room v4。
 - 当前开发构建仍沿用 `0.2.0 (3)`；下一版本号、tag 和 Release 尚未确定，也不能把当前验证表述为新版本已经发布。
 
@@ -67,10 +68,10 @@ mobile/
 - 本项目不包含车机 UI、车机产品规格或车机发布资产。
 - 本地签名文件没有从车机项目复制；Release 构建仍通过 `ANDROID_SIGNING_*` 环境变量注入签名。
 - M2 已在 API 27/API 29/API 31 完成开始、Home、单定位线程、结束和资源清理短路径；API 31 还通过了锁屏保持前台记录。Pixel_9 / API 35、Android 10 / API 29、Android 8.1 / API 27 分别完成 41 个样本、1831/1816/1816 秒回归；三轮均覆盖 Home、系统设置、锁屏和解锁返回，结束后资源完整清理。最新背压与 actor 恢复分支已在 Pixel_9/API 35 与 API 27 通过完整 `gps-core` 14/14、手机版 14/14 和 Runtime/Room 专项 1/1 回归；可恢复写失败、End 前后定位顺序、Activity 重建重绑和 actor 终态失败均已验证 Service 编排，物理低存储与真实 GPS 注册仍是发布前门禁。
-- M3 已在 Pixel_9、API 27 和 API 29 通过普通进程 `SIGKILL` 恢复验证；API 27 整机重启后活动行程数据保留但不会自动继续，用户打开应用后显示“已恢复”并重新建立服务。任务移除的 Checkpoint 已验证可跨 Service 销毁和等待协程取消继续完成，但整个进程在完成前被回收仍以最后确认检查点为上限：正常批次延迟约 1 秒，异常写失败时只保证未确认点最多 16 个，不保证时间上限或零丢点；`force-stop` 也不会被描述为普通系统恢复。
+- M3 已在 Pixel_9、API 27 和 API 29 通过普通进程 `SIGKILL` 恢复验证；API 27 整机重启后活动行程数据保留但不会自动继续，用户打开应用后显示“已恢复”并重新建立服务。任务移除的 Checkpoint 已验证可跨 Service 销毁和等待协程取消继续完成；进一步在 Pixel_9/API 35 与 API 27 把真实 Room 的 16 点批次阻塞在提交前并杀掉整个进程，两端都以新 PID、`restartCount=1` 恢复前台 Service，Room 保留 `RECORDING` 元数据但只恢复到 0 点确认边界，未确认损失窗口精确为 16 点。该结果证明恢复上限而不是零丢点：正常批次延迟约 1 秒，异常写失败仍只保证未确认点最多 16 个，不保证时间上限；`force-stop` 也不会被描述为普通系统恢复。
 - M4 原有 Room v1-v4、事务契约、损坏护栏和失败回滚套件在 API 27/29/33 各通过 12/12；存储类当前为 13/13，新增 Runtime/Room 背压专项为 1/1，完整 `gps-core` instrumentation 为 14/14。API 27/API 29 上公开正式 `v0.2.0` 覆盖当前同证书 Release 后，活动状态、开始时间、点数、距离和点序列均保持不变。
 - M5 策略实现、11 个 JVM 场景和 Pixel_9 完整权限矩阵已通过；API 27/29/31/33 已完成精确/近似适用分支、首次/永久拒绝、应用设置返回和系统定位关闭/恢复，API 33 通知首次/永久拒绝也已实机化验证。权限状态机不再是当前发布阻断项。
-- M6 已提交为 `19fa99c`：单一 `Channel.UNLIMITED` 事件队列固定先恢复，Service 通过 `LocationEnginePolicy` 与 `LocationEngineSessionController` 区分可见预览、Start 等待和已确认活动行程，并把所有定位生命周期入口收敛为幂等 reconcile；当前开发线又补充了点写失败统一失败流、确认边界重绑 replay、任务移除等待、Start 状态清理竞态、16 点存储背压、普通持久化失败输入阻断、恢复首点分段保护和 actor 单次自动恢复。队列关闭或 actor 异常会唤醒等待者并拒绝新事件；Start 等用户命令在等待方取消后会跳过尚未开始的副作用，生命周期 Checkpoint 则保留在 Runtime 队列中继续冲刷。actor 异常时 Runtime 发布“恢复中/终态失败”边界，Service 立即停定位并刷新通知；自动重建只执行一次，初始 `START_STICKY` 不会把中间错误误判成最终失败。本轮 `gps-core` 58/58、手机版 33/33 JVM（事件队列 7/7、Runtime 持久化 11/11、控制器 4/4、启动恢复策略 6/6），AndroidTest 编译、lint、lintVital、Debug/Release、R8、资源压缩和 benchmark 构建完整通过；Pixel_9/API 35 与 API 27 均复验完整 `gps-core` 14/14、手机版 14/14，真实 Service 生命周期 seam 各 8/8，已覆盖 End 前尾点、End 后定位拒绝、活动行程 `ActivityScenario.recreate()` 后重绑原 Service 不重复启停定位，以及 actor 第二次异常进入终态、不再重建队列。仍需完成物理低存储、真实 GPS 注册、Activity/Service 进程同时复杂重建、Checkpoint 完成前整个进程被回收、最终候选与真机长测。
+- M6 已提交为 `19fa99c`：单一 `Channel.UNLIMITED` 事件队列固定先恢复，Service 通过 `LocationEnginePolicy` 与 `LocationEngineSessionController` 区分可见预览、Start 等待和已确认活动行程，并把所有定位生命周期入口收敛为幂等 reconcile；当前开发线又补充了点写失败统一失败流、确认边界重绑 replay、任务移除等待、Start 状态清理竞态、16 点存储背压、普通持久化失败输入阻断、恢复首点分段保护和 actor 单次自动恢复。队列关闭或 actor 异常会唤醒等待者并拒绝新事件；Start 等用户命令在等待方取消后会跳过尚未开始的副作用，生命周期 Checkpoint 则保留在 Runtime 队列中继续冲刷。actor 异常时 Runtime 发布“恢复中/终态失败”边界，Service 立即停定位并刷新通知；自动重建只执行一次，初始 `START_STICKY` 不会把中间错误误判成最终失败。本轮 `gps-core` 58/58、手机版 33/33 JVM（事件队列 7/7、Runtime 持久化 11/11、控制器 4/4、启动恢复策略 6/6），AndroidTest 编译、lint、lintVital、Debug/Release、R8、资源压缩和 benchmark 构建完整通过；Pixel_9/API 35 与 API 27 均复验完整 `gps-core` 14/14、手机版 14/14，真实 Service 生命周期 seam 各 8/8，已覆盖 End 前尾点、End 后定位拒绝、活动行程 `ActivityScenario.recreate()` 后重绑原 Service 不重复启停定位，以及 actor 第二次异常进入终态、不再重建队列。Checkpoint 提交前整个进程回收已在两端用真实 Room 阻塞探针量化为最多 16 点损失；仍需完成物理低存储、真实 GPS 注册、Activity/Service 进程同时复杂重建、最终候选与真机长测。
 - M7 曾在 Pixel_9 生成 50,591 行 Baseline Profile 和 49,417 行 Startup Profile，旧 `DashboardViewModel` 类名命中为 0；两轮冷启动对照中 Profile 中位数分别比无预编译快约 17.4% 和 18.2%。本轮修改了 `DashboardRuntime`、`TripRecordingService`、定位策略和存储热路径，最终候选前必须重新采集 Profile 并复跑冷启动对照，不能继续把旧 Profile 当作当前代码的最终证据。AGP 9 保持延后。
 - 正式候选生成后必须先提升 `versionCode`/`versionName`，再用最终签名 APK 重跑旧包覆盖升级；当前同版本号构建的验证只证明代码、签名和数据迁移链可行。
 
@@ -90,6 +91,7 @@ mobile/
 ```zsh
 ./gradlew :gps-core:testDebugUnitTest :mobile-app:testDebugUnitTest
 ./gradlew :mobile-app:lintDebug :mobile-app:assembleDebug :mobile-app:assembleRelease
+./scripts/verify-m3-checkpoint-process-kill.zsh emulator-5554
 PIXEL9_SERIAL="<已确认的 Pixel_9 serial>"
 adb -s "$PIXEL9_SERIAL" shell getprop ro.boot.qemu.avd_name
 ANDROID_SERIAL="$PIXEL9_SERIAL" ./gradlew :gps-core:connectedDebugAndroidTest :mobile-app:connectedDebugAndroidTest

@@ -2,7 +2,7 @@
 
 作者：long
 
-更新日期：2026-08-08 18:49:57（北京时间，UTC+8）
+更新日期：2026-08-08 20:25:41（北京时间，UTC+8）
 
 ## 测试分层
 
@@ -30,6 +30,7 @@ M6 当前开发线的 `TripSessionEventQueueTest` 7/7，覆盖 Restore 固定优
   :mobile-app:lintDebug \
   :mobile-app:lintVitalRelease \
   :mobile-app:assembleDebug \
+  :mobile-app:assembleProbe \
   :mobile-app:assembleRelease \
   :baselineprofile:assembleBenchmarkRelease \
   --console=plain
@@ -117,7 +118,15 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 系统 `ApplicationExitInfo` 记录 `reason=SIGNALED`、`status=9`，随后自动创建新 PID `9355`，`restartCount=1`；未手工启动 Service。
 - 新进程恢复为 `START_STICKY`、`isForeground=true`、类型 `0x00000008`，通知仍为“CarGPS · 正在记录”，定位线程仍为 1；Activity 回前台显示“记录中 / 已恢复”。
 - 从 UI 结束行程后通知与 Service 清除，界面回到空闲，crash buffer 为空。证据为 `artifacts/cargps-mobile-m3-after-sigkill.png` 和 `.xml`。
-- 该结果证明普通进程信号终止后的确认边界恢复；后续 Service 生命周期 seam 已证明 `onTaskRemoved()` 同步入队的 Checkpoint 在 Service 销毁和等待协程取消后仍可继续完成，但不证明整个进程会在 Checkpoint 完成前保持存活，也不证明 `force-stop`、断电或未确认内存尾批零丢失。API 27/API 29 后续已完成同类聚焦恢复，低存储和尾批损失量化仍待验收，整机重启另按下一节验证。
+- 该结果证明普通进程信号终止后的确认边界恢复；后续 Service 生命周期 seam 已证明 `onTaskRemoved()` 同步入队的 Checkpoint 在 Service 销毁和等待协程取消后仍可继续完成。新增的 probe-only Room 阻塞探针又在 API 35/API 27 验证了 Checkpoint 提交前整个进程被 `SIGKILL` 时的新 PID 恢复，并把未确认损失窗口精确量化为 16 点（确认点数保持 0）。这不证明 `force-stop`、断电或物理低存储零丢失；整机重启另按下一节验证。
+
+## M3 Checkpoint 提交前进程回收回归
+
+- 探针只存在于 `mobile-app/src/probe`，使用真实 `RoomTripStorage + QueuedTripStorage + DashboardRuntime`，在 16 点批次委托 Room 事务前阻塞；普通 Debug 与 Release Manifest 都不应包含该组件或 probe-only `dataSync` 权限。
+- Pixel_9 / API 35 / `emulator-5554`：旧 PID `2786`、新 PID `2842`，`ApplicationExitInfo = SIGNALED / status=9`，`restartCount=1`，前台类型 `0x00000008`；Room 保持 `RECORDING`、确认点数 0、未确认损失 16 点。
+- Android 8.1 / API 27 / `emulator-5556`：旧 PID `22226`、新 PID `22285`，`restartCount=1`；Room 保持 `RECORDING`、确认点数 0、未确认损失 16 点。API 27 不支持 `dumpsys activity exit-info`，因此以 PID、Service、通知和 Room 查询构成证据链。
+- 成功命令为 `KEEP_RECOVERED_STATE=1 ./scripts/verify-m3-checkpoint-process-kill.zsh <serial>`；脚本显式拒绝两个目标模拟器以外的 serial。两端证据采集后已停止 `com.cargps.mobile`，未清除恢复数据库。
+- 结论：系统可恢复活动行程元数据与 `START_STICKY` Service，但 Checkpoint 真正提交前的 16 个未确认点可以全部丢失。详细实现与边界见 [M3 Checkpoint 提交前进程回收验证](./m3-checkpoint-process-kill-validation.md)。
 
 ## M3 整机重启边界回归
 
@@ -140,7 +149,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 当前开发构建仍与公开旧包同为 `0.2.0 (3)`；该结果验证代码、证书和数据库迁移链，不替代最终候选提升版本号后的再次覆盖安装，也不表示任意文件级物理损坏都能自动恢复。
 - 2026-08-08 存储故障层验证：`roomStorageKeepsActiveTripWhenSqliteConnectionIsReadOnly` 在 Room 实际打开的 `SupportSQLiteDatabase` 上执行 `PRAGMA query_only = ON`，批量写入抛出真实 `SQLiteException`；随后重开 Room，已确认轨迹点和 `ActiveTripCheckpoint` 仍保留，失败批次没有部分写入。Pixel_9 / API 35 与 Android 8.1 / API 27 的存储类均为 13/13 通过，摘要见 `artifacts/cargps-mobile-storage-readonly-summary.md`。
 - 2026-08-08 Runtime/Room 背压链路验证：`RoomRuntimeBackpressureInstrumentedTest` 在上述实际连接故障上验证前 16 点保留、第 17 点同步背压拒绝、活动行程与最后确认边界保留；切换连接可写后 `checkpointTripWritesAndAwait()` 确认 16 点并清除背压。Pixel_9/API 35 与 Android 8.1/API 27 专项均为 1/1，完整 `gps-core` instrumentation 均为 14/14；摘要见 `artifacts/cargps-mobile-runtime-backpressure-summary.md`。
-- 这些连接级用例不证明物理磁盘 `ENOSPC`；另一个真实 Service seam 已覆盖注入式可恢复写失败下的“等待存储恢复”通知、定位边界停止和检查点恢复重启，但真实 Room 物理低存储、系统 GPS 注册、恢复耗时和尾批损失量化仍未完成。计数应区分存储类 13/13、Runtime/Room 专项 1/1 和当前完整 `gps-core` 套件 14/14，不能把不同测试层混写。
+- 这些连接级用例不证明物理磁盘 `ENOSPC`；另一个真实 Service seam 已覆盖注入式可恢复写失败下的“等待存储恢复”通知、定位边界停止和检查点恢复重启。M3 probe-only Room 阻塞探针已单独量化提交前进程回收的 16 点损失窗口，但仍未覆盖真实低存储、系统 GPS 注册和恢复耗时。计数应区分存储类 13/13、Runtime/Room 专项 1/1、Service seam 8/8 和当前完整 `gps-core` 套件 14/14，不能把不同测试层混写。
 
 ## M5 权限状态机回归
 
@@ -165,7 +174,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - Start 竞态：最终状态处理移到 `startRequested` 清理之前，避免状态收集器看到旧 `IDLE` 快照而误回收正在确认的 Service。
 - 未完成证据：已在 Android 设备的真实 Room/SQLite 连接上验证永久只读写失败，并由真实 Service seam 断言注入故障后通知立即切换、定位边界停止、结束入口保留和检查点恢复后只重启一次；但尚未制造物理磁盘 `ENOSPC`，也未覆盖真实系统 GPS 注册与磁盘恢复耗时，当前不能宣称真实低存储零丢点。
 - 恢复首点分段证据：`DashboardRuntimePersistenceTest.存储失败后恢复首点不跨故障窗口补算距离速度和确认序列` 验证背压拒绝点不进入累计器；新增 `一般存储失败期间不再接收定位点且恢复首点重新断开`，验证普通错误未被新检查点确认前不再投递定位点，恢复首点以零距离重新开始。真实 Service seam 已覆盖一次可恢复写失败与检查点恢复编排，物理 Room/SQLite 空间耗尽、真实 GPS 注册和更复杂回调竞态仍未覆盖。
-- Runtime/Room 连接级专项已通过，但它仍在测试连接上切换 `PRAGMA query_only`；Service seam 使用可恢复 fake storage 和定位计数边界验证通知与启停编排。两者组合仍未覆盖物理磁盘空间耗尽、系统存储广播和真实 GPS 注册生命周期，因此不能关闭 M2/M6 的设备级发布阻断。
+- Runtime/Room 连接级专项已通过，但它仍在测试连接上切换 `PRAGMA query_only`；Service seam 使用可恢复 fake storage 和定位计数边界验证通知与启停编排；M3 probe-only 探针则使用真实 Room 在提交前杀进程并量化了 16 点尾批损失。三者仍未覆盖物理磁盘空间耗尽、系统存储广播和真实 GPS 注册生命周期，因此不能关闭 M2/M6 的设备级发布阻断。
 
 ## M6 单一事件队列回归
 
@@ -174,7 +183,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 本地完整关卡此前为 `gps-core` 44/44、手机版 24/24 JVM；当前背压、普通存储失败输入阻断、恢复首点分段、队列取消语义和 actor 单次恢复加固后为 `gps-core` 58/58、手机版 33/33 JVM，AndroidTest 编译、`lintDebug`、`lintVitalRelease`、Debug/Release、R8、资源压缩和 `baselineprofile:assembleBenchmarkRelease` 均成功。
 - Pixel_9 / API 35 与 Android 8.1 / API 27 instrumentation：本轮两端均重新执行当前完整 `gps-core` 14/14、手机版 14/14；此前 Runtime/Room 背压专项各 1/1。设备通过 serial 与 AVD/API/分辨率明确确认，所有 Gradle 设备任务通过 `ANDROID_SERIAL` 锁定，未操作 Redmi。
 - Pixel_9 运行时短路径：开始后 UI 为“记录中”，Service 为 `location` 前台类型；以应用 UID 连续两次 ensure 后 `cargps-location` 线程仍为 1；结束后回到“等待开始”且历史增加一段，Home 后 Service 清除，crash buffer 无 CarGPS 记录。
-- API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的完整 30 分钟 Home/切换应用/锁屏已通过；API 27 整机重启边界也已验证为“不开机自动拉起，打开应用后恢复”。物理低存储、尾批损失量化、Service 全路径异常竞态和真实设备 2 小时长测仍未完成。
+- API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的完整 30 分钟 Home/切换应用/锁屏已通过；API 27 整机重启边界也已验证为“不开机自动拉起，打开应用后恢复”。Checkpoint 提交前进程回收已由 probe-only 探针量化为 16 点未确认损失窗口；物理低存储、Service 全路径异常竞态和真实设备 2 小时长测仍未完成。
 - API 31 已完成可见开始、`location` 前台服务、Home、锁屏、单定位线程、活动行程撤权阻断和结束后 Home 清理短路径；它仍不计作 30 分钟长测。
 
 ## 2026-08-08 Service 真实生命周期 seam
@@ -182,7 +191,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - `TripRecordingServiceLifecycleInstrumentedTest` 通过仅测试使用的依赖工厂把真实 Service 接到真实 `DashboardRuntime`（仍包含 `TripSessionEventQueue` 和真实存储确认流程）以及可计数的定位启停边界；生产构建不注入 fake。当前八个场景覆盖 Start 门禁、可见性重绑、活动行程 Activity 重建后重绑原 Service、可恢复写失败、任务移除 Checkpoint、End 前后尾点顺序、actor 单次恢复和第二次异常终态。
 - Pixel_9 / API 35：8/8 通过；除原六个场景外，新增验证真实 `ActivityScenario.recreate()` 只替换 Activity 实例，Service 仍只创建一次且定位启停计数不增加，以及 actor 第二次异常后通知保持“行程处理异常”、不再 Restore 或重启定位、后续定位不进入已关闭队列。
 - Android 8.1 / API 27：8/8 通过；同样覆盖上述八个场景。测试授权命令使用 API 27 兼容的 `UiAutomation.executeShellCommand("pm grant ...")`，不调用 API 29 才加入的 shell identity API。
-- 该 seam 已覆盖真实 Service 的 Start 等待、前台服务升起、空闲可见性重绑、活动行程 Activity 重建重绑、注入式可恢复写失败通知、定位启停幂等、已排队 Checkpoint 跨 Service 协程取消继续完成、End 前后队列顺序、actor 单次恢复和第二次终态失败；存储与定位系统边界仍由测试依赖隔离。它不等价于物理低存储、真实系统 GPS 注册、Checkpoint 完成前整个进程被回收或 Activity 与 Service 进程同时复杂重建竞态，这些仍属于发布阻断项。详细摘要见 [M6 Activity 重建与 actor 终态回归](./m6-lifecycle-validation.md)。
+- 该 seam 已覆盖真实 Service 的 Start 等待、前台服务升起、空闲可见性重绑、活动行程 Activity 重建重绑、注入式可恢复写失败通知、定位启停幂等、已排队 Checkpoint 跨 Service 协程取消继续完成、End 前后队列顺序、actor 单次恢复和第二次终态失败；存储与定位系统边界仍由测试依赖隔离。它本身不等价于物理低存储、真实系统 GPS 注册或 Activity 与 Service 进程同时复杂重建竞态；Checkpoint 完成前进程回收另有 probe-only 真实 Room 探针覆盖，并已量化 16 点损失窗口。这些剩余边界仍属于发布阻断项。详细摘要见 [M6 Activity 重建与 actor 终态回归](./m6-lifecycle-validation.md) 和 [M3 Checkpoint 提交前进程回收验证](./m3-checkpoint-process-kill-validation.md)。
 
 ## M7 Baseline Profile 与冷启动对照
 
@@ -226,4 +235,4 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 对齐与优化：Build Tools 36 的 `zipalign -c -P 16 4` 通过；APK 内含 `assets/dexopt/baseline.prof` 和 `baseline.profm`。
 - 安装：正式包在 `Pixel_9` / API 35 冷启动成功；UI 树滚动节点为 0，crash buffer 为空。切换 debug 到 release 签名时仅清除了该模拟器内的测试数据。
 
-Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台记录已经完成，API 27 整机重启边界也已完成验证；最新普通存储失败输入阻断、恢复首点分段、Room/SQLite 只读连接故障、Runtime/Room 背压链路、两类队列取消语义、actor 单次恢复与第二次终态失败均已通过，当前完整 JVM 为 `gps-core` 58/58、手机版 33/33，存储类为 13/13，Runtime/Room 专项在 API 35/API 27 各 1/1，完整 `gps-core` 各 14/14、手机版各 14/14。Service 生命周期 seam 在两档设备各 8/8 通过，新增覆盖活动行程 Activity 重建后重绑原 Service 不重复启停定位，以及 actor 第二次异常进入终态、不再循环重建。尚未完成的物理低存储、真实 GPS 注册、Checkpoint 完成前的进程回收、Activity 与 Service 进程同时复杂重建、尾批损失量化、Profile 重采集、最终候选版本号与签名升级复验和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用常规长测或注入式故障替代物理异常环境门槛。当前不支持的“开机自动恢复”另需产品决策和权限迁移评审。
+Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台记录已经完成，API 27 整机重启边界也已完成验证；最新普通存储失败输入阻断、恢复首点分段、Room/SQLite 只读连接故障、Runtime/Room 背压链路、两类队列取消语义、actor 单次恢复与第二次终态失败均已通过，当前完整 JVM 为 `gps-core` 58/58、手机版 33/33，存储类为 13/13，Runtime/Room 专项在 API 35/API 27 各 1/1，完整 `gps-core` 各 14/14、手机版各 14/14。Service 生命周期 seam 在两档设备各 8/8 通过，新增覆盖活动行程 Activity 重建后重绑原 Service 不重复启停定位，以及 actor 第二次异常进入终态、不再循环重建。Checkpoint 完成前进程回收也已由 probe-only 真实 Room 探针在两端完成，新 PID 恢复成功且 16 点未确认损失窗口已精确量化。尚未完成的物理低存储、真实 GPS 注册、Activity 与 Service 进程同时复杂重建、Profile 重采集、最终候选版本号与签名升级复验和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用常规长测、注入式故障或本轮进程回收结果替代物理异常环境门槛。当前不支持的“开机自动恢复”另需产品决策和权限迁移评审。

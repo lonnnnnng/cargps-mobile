@@ -55,6 +55,13 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+        create("probe") {
+            initWith(getByName("debug"))
+            // 作者：long｜破坏性进程回收探针独立于日常 Debug，避免安全回归测试看到临时导出的生产 Service。
+            isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("debug")
+        }
     }
 
     compileOptions {
