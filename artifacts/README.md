@@ -38,13 +38,15 @@
 - `cargps-mobile-api35-30min-recording.xml`、`cargps-mobile-api35-end-confirm.xml`、`cargps-mobile-api35-30min-ended.xml`：长测结束时仍在记录、结束确认和历史增加后的 UI 树。
 - `release-v0.2.0/CarGPS-Mobile-v0.2.0.apk`：`0.2.0 (3)` 正式签名 APK，SHA-256 为 `8fc1238c1fdc45db0e49d3d78243abdfe834fe15e87008e53004ae3eea366bc2`。
 - `release-v0.2.0/Pixel_9-v0.2.0.png`、`Pixel_9-v0.2.0.xml`：正式包安装后的 Pixel_9 画面和 UI 树，滚动节点数量为 0。
+- `release-v0.3.0/CarGPS-Mobile-v0.3.0.apk`、`SHA256SUMS`：`0.3.0 (4)` 正式签名 APK 与只包含该 APK 的 SHA-256 校验文件；APK SHA-256 为 `0f82aec8ebf7414146a53d958c9dc2feb0006cc849772d5535a5aaee33058c09`，大小为 `1,117,952` 字节。
+- `release-v0.3.0/Pixel_9-v0.3.0-initial.png`、`Pixel_9-v0.3.0-recording.png`、`Pixel_9-v0.3.0.png` 及对应 XML：正式包在 Pixel_9 / API 35 的未授权首屏、34 米记录中和结束归档画面；三阶段滚动节点均为 0，结束并 Home 后 Service、通知、定位线程和 crash 记录均为 0。
 
 ## 历史资料
 
 - `cargps-mobile-*.png`、`cargps-mobile-*.xml`：手机版持久化、历史行程和定位状态验证。
 - `mobile-compact-*`、`mobile-rebalanced-*`：单屏密度与区块间距调整过程。
 - `mobile-final-*`、`mobile-one-screen-*`：最终单屏布局和行程状态快照。
-- `release-v0.1.0/`、`release-v0.1.1/`、`release-v0.2.0/`：手机版 APK、Pixel_9 截图和 `SHA256SUMS`。
+- `release-v0.1.0/`、`release-v0.1.1/`、`release-v0.2.0/`、`release-v0.3.0/`：手机版 APK、Pixel_9 截图和 `SHA256SUMS`。
 
 发布目录中的校验文件只列 `CarGPS-Mobile-*.apk`。移动或替换 APK 后必须重新运行 SHA-256 校验，不能把旧摘要当作新构建证据。
 

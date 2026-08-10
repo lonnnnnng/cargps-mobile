@@ -2,7 +2,7 @@
 
 作者：long
 
-更新日期：2026-08-10 14:51:57（北京时间，UTC+8）
+更新日期：2026-08-10 19:42:46（北京时间，UTC+8）
 
 ## 测试分层
 
@@ -149,7 +149,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 缺失 `total_paused` 的畸形 v3 数据库在迁移失败后仍保持版本 3、旧表结构和原始行，证明当前迁移事务不会用半成品覆盖来源库。
 - API 27/API 29 已完成 Debug 同签名与公开正式 `v0.2.0` 同证书两组覆盖升级：来源库均为 SQLite v3，覆盖后均为 Room v4，活动状态、开始时间、点数、距离、sequence 和点时间范围保持不变。
 - Debug 组：API 27 为 39 点/33.50 米，API 29 为 29 点/33.50 米；正式组：API 27 为 29 点/37.62 米，API 29 为 30 点/28.74 米。升级后界面均显示“记录中 / 已恢复”，前台服务和单条 `cargps-location` 线程正常。
-- 当前开发构建仍与公开旧包同为 `0.2.0 (3)`；该结果验证代码、证书和数据库迁移链，不替代最终候选提升版本号后的再次覆盖安装，也不表示任意文件级物理损坏都能自动恢复。
+- 当前候选已提升为 `0.3.0 (4)`；此前结果验证代码、证书和数据库迁移链，但 API 27/API 29 专用镜像清理后本次未复跑最终版本号覆盖安装，也不表示任意文件级物理损坏都能自动恢复。
 - 2026-08-08 存储故障层验证：`roomStorageKeepsActiveTripWhenSqliteConnectionIsReadOnly` 在 Room 实际打开的 `SupportSQLiteDatabase` 上执行 `PRAGMA query_only = ON`，批量写入抛出真实 `SQLiteException`；随后重开 Room，已确认轨迹点和 `ActiveTripCheckpoint` 仍保留，失败批次没有部分写入。Pixel_9 / API 35 与 Android 8.1 / API 27 的存储类均为 13/13 通过，摘要见 `artifacts/cargps-mobile-storage-readonly-summary.md`。
 - 2026-08-08 Runtime/Room 背压链路验证：`RoomRuntimeBackpressureInstrumentedTest` 在上述实际连接故障上验证前 16 点保留、第 17 点同步背压拒绝、活动行程与最后确认边界保留；切换连接可写后 `checkpointTripWritesAndAwait()` 确认 16 点并清除背压。Pixel_9/API 35 与 Android 8.1/API 27 专项均为 1/1，完整 `gps-core` instrumentation 均为 14/14；摘要见 `artifacts/cargps-mobile-runtime-backpressure-summary.md`。
 - 这些连接级用例不证明物理磁盘 `ENOSPC`；另一个真实 Service seam 已覆盖注入式可恢复写失败下的“等待存储恢复”通知、定位边界停止和检查点恢复重启。M3 probe-only Room 阻塞探针已单独量化提交前进程回收的 16 点损失窗口，但仍未覆盖真实低存储、系统 GPS 注册和恢复耗时。2026-08-08 当时的计数应区分存储类 13/13、Runtime/Room 专项 1/1、Service seam 8/8 和完整 `gps-core` 套件 14/14；新增测试的当前计数见下一节，不能把不同测试层混写。
@@ -184,7 +184,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - Start 竞态：最终状态处理移到 `startRequested` 清理之前，避免状态收集器看到旧 `IDLE` 快照而误回收正在确认的 Service。
 - 未完成证据：已在 Android 设备的真实 Room/SQLite 连接上验证永久只读写失败，并由真实 Service seam 断言注入故障后通知立即切换、定位边界停止、结束入口保留和检查点恢复后只重启一次；但尚未制造物理磁盘 `ENOSPC`，也未覆盖真实系统 GPS 注册与磁盘恢复耗时，当前不能宣称真实低存储零丢点。
 - 恢复首点分段证据：`DashboardRuntimePersistenceTest.存储失败后恢复首点不跨故障窗口补算距离速度和确认序列` 验证背压拒绝点不进入累计器；新增 `一般存储失败期间不再接收定位点且恢复首点重新断开`，验证普通错误未被新检查点确认前不再投递定位点，恢复首点以零距离重新开始。真实 Service seam 已覆盖一次可恢复写失败与检查点恢复编排，物理 Room/SQLite 空间耗尽、真实 GPS 注册和更复杂回调竞态仍未覆盖。
-- Runtime/Room 连接级专项已通过，但它仍在测试连接上切换 `PRAGMA query_only`；Service seam 使用可恢复 fake storage 和定位计数边界验证通知与启停编排；M3 probe-only 探针则使用真实 Room 在提交前杀进程并量化了 16 点尾批损失。三者仍未覆盖物理磁盘空间耗尽、系统存储广播和真实 GPS 注册生命周期，因此不能关闭 M2/M6 的设备级发布阻断。
+- Runtime/Room 连接级专项已通过，但它仍在测试连接上切换 `PRAGMA query_only`；Service seam 使用可恢复 fake storage 和定位计数边界验证通知与启停编排；M3 probe-only 探针则使用真实 Room 在提交前杀进程并量化了 16 点尾批损失。三者仍未覆盖物理磁盘空间耗尽、系统存储广播和真实 GPS 注册生命周期；这些场景作为已接受残余风险保留，不构成 `v0.3.0` 发布阻断，也不能宣称已验证或零丢点。
 
 ## M6 单一事件队列回归
 
@@ -193,7 +193,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 本地完整关卡此前为 `gps-core` 44/44、手机版 24/24 JVM；当前背压、普通存储失败输入阻断、恢复首点分段、队列取消语义和 actor 单次恢复加固后为 `gps-core` 58/58、手机版 33/33 JVM，AndroidTest 编译、`lintDebug`、`lintVitalRelease`、Debug/Release、R8、资源压缩和 `baselineprofile:assembleBenchmarkRelease` 均成功。
 - Pixel_9 / API 35 与 Android 8.1 / API 27 instrumentation：本轮两端均重新执行当前完整 `gps-core` 14/14、手机版 14/14；此前 Runtime/Room 背压专项各 1/1。设备通过 serial 与 AVD/API/分辨率明确确认，所有 Gradle 设备任务通过 `ANDROID_SERIAL` 锁定，未操作 Redmi。
 - Pixel_9 运行时短路径：开始后 UI 为“记录中”，Service 为 `location` 前台类型；以应用 UID 连续两次 ensure 后 `cargps-location` 线程仍为 1；结束后回到“等待开始”且历史增加一段，Home 后 Service 清除，crash buffer 无 CarGPS 记录。
-- API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的完整 30 分钟 Home/切换应用/锁屏已通过；API 27 整机重启边界也已验证为“不开机自动拉起，打开应用后恢复”。Checkpoint 提交前进程回收已由 probe-only 探针量化为 16 点未确认损失窗口；物理低存储、Service 全路径异常竞态和真实设备 2 小时长测仍未完成。
+- API 27/API 29 的聚焦 `START_STICKY` 恢复已通过；Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的完整 30 分钟 Home/切换应用/锁屏已通过；API 27 整机重启边界也已验证为“不开机自动拉起，打开应用后恢复”。Checkpoint 提交前进程回收已由 probe-only 探针量化为 16 点未确认损失窗口。物理低存储与真实系统 GPS 故障路径已接受为未验证残余风险；真实设备 2 小时长测本次未取得单独授权，不作为 `v0.3.0` 发布执行项。
 - API 31 已完成可见开始、`location` 前台服务、Home、锁屏、单定位线程、活动行程撤权阻断和结束后 Home 清理短路径；它仍不计作 30 分钟长测。
 
 ## 2026-08-08 Service 真实生命周期 seam
@@ -201,7 +201,7 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - `TripRecordingServiceLifecycleInstrumentedTest` 通过仅测试使用的依赖工厂把真实 Service 接到真实 `DashboardRuntime`（仍包含 `TripSessionEventQueue` 和真实存储确认流程）以及可计数的定位启停边界；生产构建不注入 fake。当前八个场景覆盖 Start 门禁、可见性重绑、活动行程 Activity 重建后重绑原 Service、可恢复写失败、任务移除 Checkpoint、End 前后尾点顺序、actor 单次恢复和第二次异常终态。
 - Pixel_9 / API 35：8/8 通过；除原六个场景外，新增验证真实 `ActivityScenario.recreate()` 只替换 Activity 实例，Service 仍只创建一次且定位启停计数不增加，以及 actor 第二次异常后通知保持“行程处理异常”、不再 Restore 或重启定位、后续定位不进入已关闭队列。
 - Android 8.1 / API 27：8/8 通过；同样覆盖上述八个场景。测试授权命令使用 API 27 兼容的 `UiAutomation.executeShellCommand("pm grant ...")`，不调用 API 29 才加入的 shell identity API。
-- 该 seam 已覆盖真实 Service 的 Start 等待、前台服务升起、空闲可见性重绑、活动行程 Activity 重建重绑、注入式可恢复写失败通知、定位启停幂等、已排队 Checkpoint 跨 Service 协程取消继续完成、End 前后队列顺序、actor 单次恢复和第二次终态失败；存储与定位系统边界仍由测试依赖隔离。Checkpoint 完成前进程回收另有 probe-only 真实 Room 探针覆盖并量化 16 点损失窗口，Activity 与 Service 同进程回收后的两阶段重绑由下一节外部脚本覆盖。上述层次仍不等价于物理低存储或真实系统 GPS 注册故障，这些设备边界继续阻断发布。详细摘要见 [M6 Activity 重建与 actor 终态回归](./m6-lifecycle-validation.md)、[M3 Checkpoint 提交前进程回收验证](./m3-checkpoint-process-kill-validation.md) 和 [M6 Activity 与 Service 同进程回收重绑验证](./m6-process-recreation-rebind-validation.md)。
+- 该 seam 已覆盖真实 Service 的 Start 等待、前台服务升起、空闲可见性重绑、活动行程 Activity 重建重绑、注入式可恢复写失败通知、定位启停幂等、已排队 Checkpoint 跨 Service 协程取消继续完成、End 前后队列顺序、actor 单次恢复和第二次终态失败；存储与定位系统边界仍由测试依赖隔离。Checkpoint 完成前进程回收另有 probe-only 真实 Room 探针覆盖并量化 16 点损失窗口，Activity 与 Service 同进程回收后的两阶段重绑由下一节外部脚本覆盖。上述层次仍不等价于物理低存储或真实系统 GPS 注册故障；这些设备边界已接受为未验证残余风险，不构成 `v0.3.0` 发布阻断。详细摘要见 [M6 Activity 重建与 actor 终态回归](./m6-lifecycle-validation.md)、[M3 Checkpoint 提交前进程回收验证](./m3-checkpoint-process-kill-validation.md) 和 [M6 Activity 与 Service 同进程回收重绑验证](./m6-process-recreation-rebind-validation.md)。
 
 ## M6 Activity 与 Service 同进程回收重绑
 
@@ -237,11 +237,11 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 
 ## 2026-08-08 正式旧包跨 API 覆盖升级
 
-- 公开 `v0.2.0` APK 与当前 Release APK 的证书 SHA-256 均为 `7807a35ea864ad038b6f3851b79333e8aedd90bb7f9521fd5ffb0d7c0375d521`。
+- 公开 `v0.2.0` APK 与当时用于覆盖升级的同版本 Room v4 Release APK，证书 SHA-256 均为 `7807a35ea864ad038b6f3851b79333e8aedd90bb7f9521fd5ffb0d7c0375d521`；该句不表示当时已经使用 `v0.3.0` 最终 APK 复验。
 - API 27：旧正式包创建 SQLite v3 活动行程，29 点、37.62 米；覆盖当前 Release 后数据库升级为 Room v4，`RECORDING`、开始时间、点数、距离、sequence 与点时间范围全部保持，界面显示“记录中 / 已恢复”。
 - API 29：旧正式包创建 SQLite v3 活动行程，30 点、28.74 米；覆盖当前 Release 后数据库升级为 Room v4，同一组活动行程字段完整保留，界面、前台服务、通知和单定位线程恢复正常。
 - Room v4 的 identity hash 为 `f87ebb25691d962beb3c76e9a6f9a505`。数据库证据为 `artifacts/cargps-mobile-api27-release-v020-before.db`、`cargps-mobile-api27-release-upgraded-after.db`、`cargps-mobile-api29-release-v020-before.db` 和 `cargps-mobile-api29-release-upgraded-after.db`。
-- 两个 APK 当前都报告 `versionName = 0.2.0`、`versionCode = 3`。正式发布前必须提升版本号，用最终候选 APK 再跑一次 API 27/API 29 覆盖升级，并复核证书、版本、数据和前台恢复。
+- 当时两个 APK 都报告 `versionName = 0.2.0`、`versionCode = 3`。`v0.3.0` 已提升为 `0.3.0 (4)`；由于 API 27/API 29 专用系统镜像已按磁盘清理要求移除，本次不重新下载镜像复跑最终版本号覆盖升级。此前同证书、同代码链的 Room v4 迁移证据继续保留，但不能表述为 `v0.3.0` 最终版本已在这两档系统覆盖升级。
 - 文档同步后的完整本地关卡再次通过，包含 JVM、AndroidTest 编译、lint、lintVital、Debug/Release、R8、资源压缩和 benchmark 构建；随后在显式确认的 `Pixel_9 / API 35 / emulator-5554` 上通过 `gps-core` 12/12 与手机版 6/6 instrumentation。
 - Pixel_9 首次普通可见启动后模拟器进程退出，Gradle 报 `Connected device with serial 'emulator-5554' not found!`；使用受管可见模式重启同一 AVD 后全部通过。该失败属于模拟器可用性，不是应用断言失败。
 
@@ -255,4 +255,13 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 对齐与优化：Build Tools 36 的 `zipalign -c -P 16 4` 通过；APK 内含 `assets/dexopt/baseline.prof` 和 `baseline.profm`。
 - 安装：正式包在 `Pixel_9` / API 35 冷启动成功；UI 树滚动节点为 0，crash buffer 为空。切换 debug 到 release 签名时仅清除了该模拟器内的测试数据。
 
-Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台记录已经完成，API 27 整机重启边界也已完成验证；最新普通存储失败输入阻断、恢复首点分段、Room/SQLite 只读连接故障、受控真实 `SQLITE_FULL`、Runtime/Room 背压链路、两类队列取消语义、actor 单次恢复与第二次终态失败均已通过，当前完整 JVM 为 `gps-core` 58/58、手机版 33/33；API 35/API 27 的当前存储类各 14/14、Runtime/Room 类各 2/2，`gps-core` instrumentation 合计各 16/16，手机版最近完整回归各 14/14。Service 生命周期 seam 在两档设备各 8/8 通过，新增覆盖活动行程 Activity 重建后重绑原 Service 不重复启停定位，以及 actor 第二次异常进入终态、不再循环重建。Checkpoint 完成前进程回收已由 probe-only 真实 Room 探针在两端完成，新 PID 恢复成功且 16 点未确认损失窗口已精确量化；前台 Activity/Service 同进程回收后的 Service 独立恢复和用户返回重绑也已在两端通过，进程、ServiceRecord 和定位线程均保持唯一。M7 当前热路径 Profile 已重采集并完成两轮冷启动对照。尚未完成的物理低存储、真实 GPS 注册、最终候选版本号与签名升级复验和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用数据库页上限、常规长测、注入式故障、模拟器性能或本轮进程回收结果替代物理异常环境和真机门槛。后续热路径变化必须重新生成 Profile；当前不支持的“开机自动恢复”另需产品决策和权限迁移评审。
+## v0.3.0 发布验收
+
+- APK：`com.cargps.mobile`，`versionCode = 4`，`versionName = 0.3.0`，`minSdk = 27`，`targetSdk = 36`，文件大小 `1,117,952` 字节。
+- SHA-256：`0f82aec8ebf7414146a53d958c9dc2feb0006cc849772d5535a5aaee33058c09`；本地 APK 与 `SHA256SUMS` 一致。
+- 签名：APK Signature Scheme v2 通过，证书 SHA-256 为 `7807a35ea864ad038b6f3851b79333e8aedd90bb7f9521fd5ffb0d7c0375d521`。
+- 构建：完整本地关卡 `BUILD SUCCESSFUL in 47s`，309 项任务成功；`gps-core` 58/58、`mobile-app` 33/33 JVM 无失败，Release 确认启用 R8、资源压缩并内嵌 `baseline.prof` 4,107 字节和 `baseline.profm` 199 字节。
+- Pixel_9 / API 35：正式包冷启动 `LaunchState: COLD`，约 382ms；精确定位和通知权限流程通过，记录时 Service 为 `isForeground=true`、类型 `0x8 location`，通知含“结束行程”。注入模拟位置后记录 34 米并成功结束，历史增加为 1 段；初始、记录中和结束后的 UI 树滚动节点均为 0，Home 后 Service、通知、定位线程和 CarGPS crash 均为 0。
+- 未复验边界：API 27/API 29 最终版本号覆盖升级、物理低存储、真实 GPS 故障、断电、`force-stop` 零丢点和真机 2 小时长测。Checkpoint 提交前最多 16 个未确认点可以全部丢失，不能把本次发布描述为零丢点。
+
+Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台记录已经完成，API 27 整机重启边界也已完成验证；最新普通存储失败输入阻断、恢复首点分段、Room/SQLite 只读连接故障、受控真实 `SQLITE_FULL`、Runtime/Room 背压链路、两类队列取消语义、actor 单次恢复与第二次终态失败均已通过，当前完整 JVM 为 `gps-core` 58/58、手机版 33/33；API 35/API 27 的当前存储类各 14/14、Runtime/Room 类各 2/2，`gps-core` instrumentation 合计各 16/16，手机版最近完整回归各 14/14。Service 生命周期 seam 在两档设备各 8/8 通过，新增覆盖活动行程 Activity 重建后重绑原 Service 不重复启停定位，以及 actor 第二次异常进入终态、不再循环重建。Checkpoint 完成前进程回收已由 probe-only 真实 Room 探针在两端完成，新 PID 恢复成功且 16 点未确认损失窗口已精确量化；前台 Activity/Service 同进程回收后的 Service 独立恢复和用户返回重绑也已在两端通过，进程、ServiceRecord 和定位线程均保持唯一。M7 当前热路径 Profile 已重采集并完成两轮冷启动对照。物理低存储、真实 GPS 注册、断电与 `force-stop` 零丢点作为未验证残余风险继续披露；API 27/API 29 最终版本号覆盖升级和真实设备 2 小时长测作为本次未复验发布边界披露，不能用数据库页上限、常规长测、注入式故障、模拟器性能或进程回收结果替代。后续热路径变化必须重新生成 Profile；当前不支持的“开机自动恢复”另需产品决策和权限迁移评审。

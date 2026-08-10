@@ -10,7 +10,7 @@
 - [M6 Activity 重建与 actor 终态回归](./m6-lifecycle-validation.md)：双设备 Service 8/8、完整 instrumentation 14/14 + 14/14、首次断言修正和剩余边界。
 - [M6 Activity 与 Service 同进程回收重绑验证](./m6-process-recreation-rebind-validation.md)：前台 Activity 与 location Service 同进程 `SIGKILL`、Service 独立恢复、用户返回后唯一进程/Service/定位线程重绑；Pixel_9/API 35 与 API 27 均已通过。
 - [M3 Checkpoint 提交前进程回收验证](./m3-checkpoint-process-kill-validation.md)：probe-only 真实 Room 阻塞探针、应用 UID `SIGKILL`、双设备 `START_STICKY` 新 PID 与 16 点未确认损失窗口量化。
-- [剩余高风险迁移项](./migration-risks.md)：M1-M7 落地证据、16 点有界存储背压、受控真实 `SQLITE_FULL`、提交前进程回收的 16 点损失量化、Activity/Service 同进程回收重绑、恢复首点分段 seam、API 27/29 正式旧包升级、跨 API 完整权限矩阵、三档 30 分钟回归、API 27 整机重启和当前热路径 Profile 刷新结论，以及物理低存储/真实 GPS、最终候选、真机长测、开机自动恢复评审和 AGP 9 的剩余顺序与验收门槛。
+- [剩余高风险迁移项](./migration-risks.md)：M1-M7 落地证据、16 点有界存储背压、受控真实 `SQLITE_FULL`、提交前进程回收的 16 点损失量化、Activity/Service 同进程回收重绑、恢复首点分段 seam、API 27/29 正式旧包升级、跨 API 完整权限矩阵、三档 30 分钟回归、API 27 整机重启和当前热路径 Profile 刷新结论，以及已接受残余风险、未复验发布边界、开机自动恢复评审和 AGP 9 后续顺序。
 - [ADR-0001](./adr/0001-use-platform-locationmanager.md)：拆分基线继续采用系统 `LocationManager`，后续架构升级由手机版独立验证。
 
 ## 发布记录
@@ -18,5 +18,6 @@
 - [v0.1.0](./release-notes-v0.1.0.md)：首个手机版正式版本。
 - [v0.1.1](./release-notes-v0.1.1.md)：Pixel_9 单屏布局与中文遥测优化版本。
 - [v0.2.0](./release-notes-v0.2.0.md)：手机版依赖、架构、存储和性能体系独立升级版本。
+- [v0.3.0](./release-notes-v0.3.0.md)：M1-M7 正式交付、Room v4、定位前台服务、16 点有界背压、进程恢复和权限状态机版本。
 
-截图、UI Automator XML、APK 和 `SHA256SUMS` 不放在文档目录，统一归档于本地 [artifacts](../artifacts/README.md)，并按仓库规则默认忽略。当前正式包验证文件名为 `release-v0.2.0/Pixel_9-v0.2.0.png` 和 `Pixel_9-v0.2.0.xml`；API 35、API 29、API 27 长测摘要分别为 `cargps-mobile-api35-30min-summary.md`、`cargps-mobile-api29-30min-summary.md`、`cargps-mobile-api27-30min-summary.md`，API 27 整机重启边界摘要为 `cargps-mobile-api27-reboot-summary.md`。
+截图、UI Automator XML、APK 和 `SHA256SUMS` 不放在文档目录，统一归档于本地 [artifacts](../artifacts/README.md)，并按仓库规则默认忽略。`v0.3.0` 正式包验证文件位于 `release-v0.3.0/`；API 35、API 29、API 27 长测摘要分别为 `cargps-mobile-api35-30min-summary.md`、`cargps-mobile-api29-30min-summary.md`、`cargps-mobile-api27-30min-summary.md`，API 27 整机重启边界摘要为 `cargps-mobile-api27-reboot-summary.md`。

@@ -64,9 +64,9 @@ ANDROID_SERIAL=emulator-5556 ./gradlew \
 
 首次 Pixel_9 Service 类回归中，Activity 重建用例曾因断言“历史 stop 次数必须为 0”失败。读取测试报告后确认，Service 创建时会先对初始空闲态执行一次 `STOP` 决策，随后活动行程再执行 `START`；这不是重建导致的停止。测试已改为比较重建前后的 `start/stop` 计数不变，专项 1/1、完整 Service 类 8/8 和双设备完整套件随后均通过。
 
-## 尚未关闭的风险
+## 已接受残余风险与发布边界
 
-- 物理磁盘 `ENOSPC`/低存储下，真实 Room、系统 GPS 注册停止与恢复耗时仍未验证。
+- 物理磁盘 `ENOSPC`/低存储下，真实 Room、系统 GPS 注册停止与恢复耗时仍未验证；该项作为已接受残余风险保留，不构成 `v0.3.0` 发布阻断，也不能宣称已覆盖或零丢点。
 - 后续 [M3 Checkpoint 提交前进程回收验证](./m3-checkpoint-process-kill-validation.md) 已在 Pixel_9/API 35 与 API 27 使用 probe-only 真实 Room 阻塞探针补齐：系统以新 PID 恢复 `START_STICKY` Service，但 16 个未确认点全部丢失、确认点数保持 0。该结论明确恢复上限，不代表断电、`force-stop` 或物理低存储零丢点。
 - 本轮 instrumentation 只覆盖“活动行程中的 Activity 重建并重绑现有 Service”；后续 [M6 Activity 与 Service 同进程回收重绑验证](./m6-process-recreation-rebind-validation.md) 已在 Pixel_9/API 35 与 API 27 补齐前台 Activity 与 Service 同进程 `SIGKILL`、Service 独立恢复和用户返回重绑，且两端均保持唯一进程、唯一 Service 与唯一定位线程。该证据仍不代表所有厂商任务栈或物理低存储/GPS 故障。
-- M7 已按当前热路径重采集 Profile 并完成两轮 Pixel_9 相对冷启动对照。最终候选仍需提升版本号、重跑同签名覆盖升级，并在取得单独设备授权后完成真实设备 2 小时长测；若热路径继续变化，Profile 重新进入门禁。
+- M7 已按当前热路径重采集 Profile 并完成两轮 Pixel_9 相对冷启动对照。`v0.3.0` 已提升为 `0.3.0 (4)`；API 27/API 29 最终版本号覆盖升级和真实设备 2 小时长测本次未复验，作为发布边界披露。若热路径继续变化，Profile 重新进入门禁。
