@@ -12,6 +12,7 @@ class RoomTripStorage(
     context: Context,
     databaseName: String = DEFAULT_DATABASE_NAME,
     private val onDatabaseOpen: ((SupportSQLiteDatabase) -> Unit)? = null,
+    journalMode: RoomDatabase.JournalMode? = null,
 ) : TripStorage {
     private val database = Room.databaseBuilder(
         context.applicationContext,
@@ -22,6 +23,10 @@ class RoomTripStorage(
         RoomTripDatabase.MIGRATION_2_3,
         RoomTripDatabase.MIGRATION_3_4,
     ).apply {
+        journalMode?.let { mode ->
+            // 作者：long｜生产装配沿用 Room 默认 journal mode；设备测试用 TRUNCATE 让 max_page_count 真正触发 SQLITE_FULL。
+            setJournalMode(mode)
+        }
         onDatabaseOpen?.let { callback ->
             // 作者：long｜生产装配不传入回调；测试只借此在 Room 实际打开的连接上注入永久 I/O 故障。
             addCallback(

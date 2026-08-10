@@ -2,6 +2,8 @@ package com.cargps.storage
 
 import android.content.Context
 import android.database.sqlite.SQLiteException
+import android.database.sqlite.SQLiteFullException
+import androidx.room.RoomDatabase
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.cargps.TripMode
@@ -16,6 +18,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(AndroidJUnit4::class)
 class SqliteTripStorageInstrumentedTest {
@@ -342,6 +345,61 @@ class SqliteTripStorageInstrumentedTest {
             assertEquals(
                 ActiveTripCheckpoint(1_000L, 1L, 1L, 2_000L),
                 storage.loadActiveTripCheckpoint(),
+            )
+        }
+    }
+
+    @Test
+    fun roomStorageKeepsConfirmedDataAndRecoversAfterSqliteFull() {
+        val openedDatabase = AtomicReference<androidx.sqlite.db.SupportSQLiteDatabase?>()
+        val durablePoint = TripPoint(2_000L, 8.0, 12.5, true)
+        val retryBatch = List(16) { index ->
+            TripPoint(
+                timestampMillis = 3_000L + index,
+                speedMps = 4.0,
+                distanceFromPreviousMeters = 1.0,
+                moving = true,
+            )
+        }
+
+        RoomTripStorage(
+            context = context,
+            databaseName = DATABASE_NAME,
+            onDatabaseOpen = { database -> openedDatabase.compareAndSet(null, database) },
+            journalMode = RoomDatabase.JournalMode.TRUNCATE,
+        ).use { storage ->
+            storage.startTrip(1_000L)
+            storage.appendPoints(listOf(durablePoint))
+
+            val database = requireNotNull(openedDatabase.get())
+            val faultState = SqliteFullFaultController.arm(database)
+            try {
+                val failure = assertThrows(SQLiteFullException::class.java) {
+                    storage.appendPoints(retryBatch)
+                }
+                assertTrue(failure.message.orEmpty().contains("full", ignoreCase = true))
+            } finally {
+                SqliteFullFaultController.release(database, faultState)
+            }
+
+            // 作者：long｜SQLITE_FULL 批次必须整体回滚；解除页上限后同一批次可重试并推进确认检查点。
+            assertEquals(listOf(durablePoint), requireNotNull(storage.loadActiveTrip().activeTripOrNull()).points)
+            assertEquals(
+                ActiveTripCheckpoint(1_000L, 1L, 1L, 2_000L),
+                storage.loadActiveTripCheckpoint(),
+            )
+
+            storage.appendPoints(retryBatch)
+            assertEquals(
+                ActiveTripCheckpoint(1_000L, 17L, 17L, 3_015L),
+                storage.loadActiveTripCheckpoint(),
+            )
+        }
+
+        RoomTripStorage(context, DATABASE_NAME).use { storage ->
+            assertEquals(
+                listOf(durablePoint) + retryBatch,
+                requireNotNull(storage.loadActiveTrip().activeTripOrNull()).points,
             )
         }
     }

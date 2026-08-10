@@ -2,7 +2,7 @@
 
 作者：long
 
-更新日期：2026-08-08 21:50:19（北京时间，UTC+8）
+更新日期：2026-08-10 14:51:57（北京时间，UTC+8）
 
 ## 测试分层
 
@@ -18,6 +18,8 @@
 生产存储为 `RoomTripStorage`；`SqliteTripStorage` 只用于旧 schema fixture 和 adapter 兼容测试。Room v4 schema 导出到 `gps-core/schemas/com.cargps.storage.RoomTripDatabase/4.json`，所有旧版本迁移均显式注册，禁止 destructive fallback。
 
 `TripSessionCoordinatorTest` 通过 fake storage 注入开始、暂停、恢复、结束、定位点同步写入失败、存储背压和异步写入错误，验证元数据命令失败时保持上一个确认模式、点写失败不终止会话、背压恢复后清除临时错误、重复命令不重复写、多段暂停只扣除真实暂停时长。`QueuedTripStorageTest` 另外验证瞬时批量失败重试成功不误报、连续失败由屏障抛出、晚到订阅者仍可取得最近确认检查点、未确认点最多 16 个且第 17 个被拒绝，以及存储恢复后配额释放并可继续写入。`TripStorageFailureIntegrationTest` 组合真实 `TripSessionCoordinator + QueuedTripStorage`，断言永久批次失败期间保持最后确认检查点，恢复后再确认原尾批；这些是 JVM 领域/队列故障注入，不等价于物理 `ENOSPC`。`SqliteTripStorageInstrumentedTest.roomStorageKeepsActiveTripWhenSqliteConnectionIsReadOnly` 在 Room 实际打开的 SQLite 连接上注入只读状态，验证存储层永久写失败的事务原子性；`RoomRuntimeBackpressureInstrumentedTest` 再把同一故障推进到 `QueuedTripStorage -> DashboardRuntime`，验证 16 点上限、第 17 点拒绝和恢复后检查点确认。
+
+当前又加入受控真实 `SQLITE_FULL` 回归：`SqliteFullFaultController` 只限制测试数据库的 `max_page_count`，不消耗共享模拟器剩余磁盘；Room 层验证真实 `SQLiteFullException`、批次整体回滚、解除页上限后重试和重开完整性，Runtime 层验证 16 点尾批、第 17 点背压和检查点恢复。该层仍不等价于物理磁盘 `ENOSPC`。
 
 M6 当前开发线的 `TripSessionEventQueueTest` 7/7，覆盖 Restore 固定优先与完整 FIFO、等待型 Start、关闭取消、actor 异常终止、消费时连续 Toggle、恢复阻塞期间取消等待后跳过尚未消费的 Start，以及取消生命周期等待后仍执行已排队 Checkpoint。协调器测试补充 End 前尾点纳入、End 后点拒绝、点写失败统一失败流、16 点背压和确认恢复；`DashboardRuntimePersistenceTest` 11/11 进一步验证 actor 异常立即阻断定位输入、从确认边界单次自动重建、初始 `START_STICKY` 等待重建结果、第二次异常进入终态，以及恢复首点不跨故障窗口补算距离、速度和确认序列。手机版 `TripStartOrchestratorTest` 5/5，覆盖纯编排回调在确认前不调用 `startLocation`、最终状态先于请求标记清理、Start 失败、权限等待期间失效和异常清理；`LocationEnginePolicyTest` 7/7 覆盖普通存储失败与背压时停止定位，`LocationEngineSessionControllerTest` 4/4 覆盖启停幂等和启动失败重试，`StartedServiceRecoveryPolicyTest` 6/6 覆盖 actor 恢复中继续等待、终态失败停止恢复。控制器和策略 JVM seam 已由两档设备上的真实 Service 8/8 instrumentation 补充，新增真实 Activity 重建重绑和 actor 第二次终态失败，但仍不等价于物理低存储或真实系统 GPS 故障。
 
@@ -150,7 +152,14 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 当前开发构建仍与公开旧包同为 `0.2.0 (3)`；该结果验证代码、证书和数据库迁移链，不替代最终候选提升版本号后的再次覆盖安装，也不表示任意文件级物理损坏都能自动恢复。
 - 2026-08-08 存储故障层验证：`roomStorageKeepsActiveTripWhenSqliteConnectionIsReadOnly` 在 Room 实际打开的 `SupportSQLiteDatabase` 上执行 `PRAGMA query_only = ON`，批量写入抛出真实 `SQLiteException`；随后重开 Room，已确认轨迹点和 `ActiveTripCheckpoint` 仍保留，失败批次没有部分写入。Pixel_9 / API 35 与 Android 8.1 / API 27 的存储类均为 13/13 通过，摘要见 `artifacts/cargps-mobile-storage-readonly-summary.md`。
 - 2026-08-08 Runtime/Room 背压链路验证：`RoomRuntimeBackpressureInstrumentedTest` 在上述实际连接故障上验证前 16 点保留、第 17 点同步背压拒绝、活动行程与最后确认边界保留；切换连接可写后 `checkpointTripWritesAndAwait()` 确认 16 点并清除背压。Pixel_9/API 35 与 Android 8.1/API 27 专项均为 1/1，完整 `gps-core` instrumentation 均为 14/14；摘要见 `artifacts/cargps-mobile-runtime-backpressure-summary.md`。
-- 这些连接级用例不证明物理磁盘 `ENOSPC`；另一个真实 Service seam 已覆盖注入式可恢复写失败下的“等待存储恢复”通知、定位边界停止和检查点恢复重启。M3 probe-only Room 阻塞探针已单独量化提交前进程回收的 16 点损失窗口，但仍未覆盖真实低存储、系统 GPS 注册和恢复耗时。计数应区分存储类 13/13、Runtime/Room 专项 1/1、Service seam 8/8 和当前完整 `gps-core` 套件 14/14，不能把不同测试层混写。
+- 这些连接级用例不证明物理磁盘 `ENOSPC`；另一个真实 Service seam 已覆盖注入式可恢复写失败下的“等待存储恢复”通知、定位边界停止和检查点恢复重启。M3 probe-only Room 阻塞探针已单独量化提交前进程回收的 16 点损失窗口，但仍未覆盖真实低存储、系统 GPS 注册和恢复耗时。2026-08-08 当时的计数应区分存储类 13/13、Runtime/Room 专项 1/1、Service seam 8/8 和完整 `gps-core` 套件 14/14；新增测试的当前计数见下一节，不能把不同测试层混写。
+
+## 2026-08-10 受控 SQLITE_FULL 回归
+
+- 故障控制器把测试数据库页上限限制为当前页数加 8 页，通过负时间戳填充行触发真实 `SQLiteFullException`；释放时恢复页上限、删除填充行并恢复自增序列，不填满模拟器共享磁盘。
+- Pixel_9 / API 35：新增 Runtime 用例单独 1/1；存储类 14 项与 Runtime 2 项合计 16/16；无 class 过滤的完整 `gps-core` instrumentation 16/16。
+- Android 8.1 / API 27：在已确认的 `CASKA_1024x600` 上显式执行全部两个 instrumentation 类，存储类 14 项与 Runtime 2 项合计 16/16。
+- 结果证明真实 SQLite 页容量错误下批次原子回滚、16 点有界背压和恢复检查点；不证明物理 `ENOSPC`、系统低存储广播、真实 Service/GPS 停止恢复、断电或 `force-stop` 零丢点。摘要见 `artifacts/cargps-mobile-sqlite-full-summary.md`。
 
 ## M5 权限状态机回归
 
@@ -246,4 +255,4 @@ Macrobenchmark 已显式允许 `EMULATOR`，这些数值只用于同一 Pixel_9 
 - 对齐与优化：Build Tools 36 的 `zipalign -c -P 16 4` 通过；APK 内含 `assets/dexopt/baseline.prof` 和 `baseline.profm`。
 - 安装：正式包在 `Pixel_9` / API 35 冷启动成功；UI 树滚动节点为 0，crash buffer 为空。切换 debug 到 release 签名时仅清除了该模拟器内的测试数据。
 
-Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台记录已经完成，API 27 整机重启边界也已完成验证；最新普通存储失败输入阻断、恢复首点分段、Room/SQLite 只读连接故障、Runtime/Room 背压链路、两类队列取消语义、actor 单次恢复与第二次终态失败均已通过，当前完整 JVM 为 `gps-core` 58/58、手机版 33/33，存储类为 13/13，Runtime/Room 专项在 API 35/API 27 各 1/1，完整 `gps-core` 各 14/14、手机版各 14/14。Service 生命周期 seam 在两档设备各 8/8 通过，新增覆盖活动行程 Activity 重建后重绑原 Service 不重复启停定位，以及 actor 第二次异常进入终态、不再循环重建。Checkpoint 完成前进程回收已由 probe-only 真实 Room 探针在两端完成，新 PID 恢复成功且 16 点未确认损失窗口已精确量化；前台 Activity/Service 同进程回收后的 Service 独立恢复和用户返回重绑也已在两端通过，进程、ServiceRecord 和定位线程均保持唯一。M7 当前热路径 Profile 已重采集并完成两轮冷启动对照。尚未完成的物理低存储、真实 GPS 注册、最终候选版本号与签名升级复验和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用常规长测、注入式故障、模拟器性能或本轮进程回收结果替代物理异常环境和真机门槛。后续热路径变化必须重新生成 Profile；当前不支持的“开机自动恢复”另需产品决策和权限迁移评审。
+Pixel_9 / API 35、Android 10 / API 29 与 Android 8.1 / API 27 的 30 分钟后台记录已经完成，API 27 整机重启边界也已完成验证；最新普通存储失败输入阻断、恢复首点分段、Room/SQLite 只读连接故障、受控真实 `SQLITE_FULL`、Runtime/Room 背压链路、两类队列取消语义、actor 单次恢复与第二次终态失败均已通过，当前完整 JVM 为 `gps-core` 58/58、手机版 33/33；API 35/API 27 的当前存储类各 14/14、Runtime/Room 类各 2/2，`gps-core` instrumentation 合计各 16/16，手机版最近完整回归各 14/14。Service 生命周期 seam 在两档设备各 8/8 通过，新增覆盖活动行程 Activity 重建后重绑原 Service 不重复启停定位，以及 actor 第二次异常进入终态、不再循环重建。Checkpoint 完成前进程回收已由 probe-only 真实 Room 探针在两端完成，新 PID 恢复成功且 16 点未确认损失窗口已精确量化；前台 Activity/Service 同进程回收后的 Service 独立恢复和用户返回重绑也已在两端通过，进程、ServiceRecord 和定位线程均保持唯一。M7 当前热路径 Profile 已重采集并完成两轮冷启动对照。尚未完成的物理低存储、真实 GPS 注册、最终候选版本号与签名升级复验和真实设备长测见 [剩余高风险迁移项](./migration-risks.md)，不能用数据库页上限、常规长测、注入式故障、模拟器性能或本轮进程回收结果替代物理异常环境和真机门槛。后续热路径变化必须重新生成 Profile；当前不支持的“开机自动恢复”另需产品决策和权限迁移评审。

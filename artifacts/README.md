@@ -1,6 +1,6 @@
 # 手机版验证产物
 
-本目录存放 `com.cargps.mobile` 在 `Pixel_9` 和跨 API 模拟器上产生的本地验证资料。除本说明外，其余文件默认不进入 Git；所有设备命令都显式指定 serial，不操作 Redmi 真机。当前已有 JVM 普通存储失败/背压恢复首点分段证据、`LocationEngineSessionController` 启停幂等 seam（4/4）和真实 Room/SQLite 存储层只读写失败证据、Runtime/Room 背压链路证据，但尚无物理低存储截图或通知/GPS 恢复产物。控制器 seam 没有独立设备产物，需与 Service 全路径故障注入区分记录。
+本目录存放 `com.cargps.mobile` 在 `Pixel_9` 和跨 API 模拟器上产生的本地验证资料。除本说明外，其余文件默认不进入 Git；所有设备命令都显式指定 serial，不操作 Redmi 真机。当前已有 JVM 普通存储失败/背压恢复首点分段证据、`LocationEngineSessionController` 启停幂等 seam（4/4）、真实 Room/SQLite 存储层只读写失败证据、受控真实 `SQLITE_FULL` 与 Runtime/Room 背压链路证据，但尚无物理低存储截图或通知/GPS 恢复产物。控制器 seam 没有独立设备产物，需与 Service 全路径故障注入区分记录。
 
 ## 当前验证
 
@@ -31,6 +31,7 @@
 - `cargps-mobile-api35-30min-summary.md`：Pixel_9 / API 35 的 41 个样本、1831 秒后台回归摘要，覆盖 Home、系统设置、锁屏睡眠和解锁返回。
 - `cargps-mobile-storage-readonly-summary.md`：在 Room 实际打开的 SQLite 连接上执行 `PRAGMA query_only = ON` 后，Pixel_9/API 35 与 Android 8.1/API 27 的存储类各 13/13 通过；批量写失败时活动行程、已确认点和检查点保留且没有部分批次。该证据不等价于物理 `ENOSPC`。
 - `cargps-mobile-runtime-backpressure-summary.md`：通过真实 Room 连接把只读故障推进到 `QueuedTripStorage -> DashboardRuntime`，Pixel_9/API 35 与 Android 8.1/API 27 专项用例各 1/1、完整 `gps-core` instrumentation 各 14/14；验证前 16 点保留、第 17 点拒绝、活动行程不清除、恢复后 16 点检查点确认。该证据仍不等价于物理 `ENOSPC` 或完整 `TripRecordingService` 设备路径。
+- `cargps-mobile-sqlite-full-summary.md`：通过测试数据库 `max_page_count` 限页触发真实 `SQLiteFullException`，不填满共享模拟器磁盘；Pixel_9/API 35 与 Android 8.1/API 27 的存储类 14 项、Runtime 2 项合计各 16/16，验证批次回滚、16 点有界背压和恢复检查点。该证据仍不等价于物理磁盘 `ENOSPC` 或真实 Service/GPS 故障路径。
 - `cargps-mobile-controller-instrumentation-20260808.md`：控制器接入和 `LocationEngine.start()` 失败回滚后的双设备完整 instrumentation 摘要；Pixel_9/API 35 与 Android 8.1/API 27 各为 `gps-core` 14/14、手机版 6/6。该摘要明确区分本轮完整套件与此前 Runtime/Room 背压专项证据。
 - `cargps-mobile-m7-refresh-startup-benchmark-run1.json`：当前热路径 Profile 刷新后的第一轮 Pixel_9 冷启动对照；无预编译中位 244.03ms，Baseline Profile 中位 201.43ms，改善 17.46%，SHA-256 为 `4963bff7a11198f4464bb8f44100bc551e1cb03827cbe4d47a28372f5c0579cd`。
 - `cargps-mobile-m7-refresh-startup-benchmark-run2.json`：第二轮对照；无预编译中位 393.52ms，Baseline Profile 中位 297.62ms，改善 24.37%，SHA-256 为 `687e769211f6c6fcf60a805f9ce433e45207a5d52c85d0d849a03a99ed625b93`。该轮波动明显，且设备未锁 CPU，只能用于同一 AVD 相对比较。
@@ -47,7 +48,7 @@
 
 发布目录中的校验文件只列 `CarGPS-Mobile-*.apk`。移动或替换 APK 后必须重新运行 SHA-256 校验，不能把旧摘要当作新构建证据。
 
-M2 早期一次 30 分钟后台监测在第 5 个一分钟样本后被外部 `force-stop` 中断；系统退出记录为 `USER REQUESTED / FORCE STOP`，crash buffer 为空。该次监测既不计为通过，也不计为应用崩溃。2026-08-08 已重新完成 Pixel_9 / API 35 的 41 个样本、1831 秒回归、Android 10 / API 29 的 41 个样本、1816 秒回归，以及 Android 8.1 / API 27 的 41 个样本、1816 秒回归；随后 API 27 完成整机重启边界验证：活动行程保留，但系统不自动拉起手机版 Service，打开应用后恢复。当前存储类已在 Room/SQLite 真实只读连接上通过 13/13，Runtime/Room 背压专项用例和完整 `gps-core` instrumentation 又在 API 35/API 27 各通过 1/1、14/14；M3 probe-only 真实 Room 探针已经把 Checkpoint 提交前的尾批损失量化为 16 点，M6 外部脚本也闭环了 Activity/Service 同进程回收重绑。仍没有物理低存储截图、通知/GPS 停止恢复或真实道路长测产物。
+M2 早期一次 30 分钟后台监测在第 5 个一分钟样本后被外部 `force-stop` 中断；系统退出记录为 `USER REQUESTED / FORCE STOP`，crash buffer 为空。该次监测既不计为通过，也不计为应用崩溃。2026-08-08 已重新完成 Pixel_9 / API 35 的 41 个样本、1831 秒回归、Android 10 / API 29 的 41 个样本、1816 秒回归，以及 Android 8.1 / API 27 的 41 个样本、1816 秒回归；随后 API 27 完成整机重启边界验证：活动行程保留，但系统不自动拉起手机版 Service，打开应用后恢复。当前受控真实 `SQLITE_FULL` 回归在 API 35/API 27 的存储类各 14/14、Runtime/Room 类各 2/2，`gps-core` instrumentation 合计各 16/16；原只读连接 13/13 与背压专项 1/1、完整 14/14 摘要保留为历史证据。M3 probe-only 真实 Room 探针已经把 Checkpoint 提交前的尾批损失量化为 16 点，M6 外部脚本也闭环了 Activity/Service 同进程回收重绑。仍没有物理低存储截图、通知/GPS 停止恢复或真实道路长测产物。
 
 API 35 长测期间 PID 始终为 `4395`、前台服务持续、`cargps-location` 线程始终为 1、crash buffer 始终为 0；锁屏进入 `Dozing/Asleep` 后仍持续记录。正常结束后历史从 0 段增加为 1 段，Home 后 Service、活动通知和定位线程均归零，GPS provider 为 `OFF` 并记录应用注销事件。
 
